@@ -6,16 +6,28 @@ FootFix streamlines image optimization workflows by automating the manual proces
 
 ## Features
 
-- **Batch Processing**: Process 6-30 images simultaneously with progress tracking
-- **Preset Profiles**: Three optimized profiles for different use cases:
+### Phase 2 - Enhanced Batch Processing (NEW!)
+- **Advanced Queue Management**: Add/remove images before processing starts
+- **Folder Processing**: Drag entire folders to process all images inside
+- **Real-time Progress**: Track current image, time elapsed, and estimated time remaining
+- **Error Resilience**: Individual image failures don't stop the entire batch
+- **Background Processing**: Keep working while images process in the background
+- **Cancel Support**: Stop batch processing at any time without losing completed work
+
+### Core Features
+- **Batch Processing**: Process 6-30+ images simultaneously with detailed progress tracking
+- **Preset Profiles**: Four optimized profiles for different use cases:
   - Editorial Web (max 2560×1440px, 0.5-1MB target)
-  - Social Media (Instagram Story/Feed optimized)
   - Email Marketing (max 600px width, <100KB target)
-- **Drag & Drop Interface**: Simply drag images into the application to start processing
-- **Before/After Preview**: Compare original and optimized images before final processing
+  - Instagram Story (1080×1920px, 9:16 aspect ratio)
+  - Instagram Feed Portrait (1080×1350px, 4:5 aspect ratio)
+- **Smart Drag & Drop**: 
+  - Single images open in single processing mode
+  - Multiple images or folders automatically switch to batch mode
+  - Visual feedback during drag operations
+- **Dual Processing Modes**: Single image tab for quick edits, batch tab for bulk operations
 - **Multiple Formats**: Support for JPEG, PNG, and TIFF input files
-- **Custom Settings**: Advanced options for power users with manual overrides
-- **Smart Output**: Automatic file naming and organization
+- **Smart Output**: Automatic file naming based on preset and original filename
 
 ## Requirements
 
@@ -53,12 +65,25 @@ footfix
 
 ## Usage
 
+### Single Image Processing
 1. **Launch the application**: Run `python main.py` or `footfix` command
-2. **Add images**: Drag and drop images or folders into the application window
-3. **Select preset**: Choose from Editorial Web, Social Media, or Email profiles
-4. **Preview results**: Use the before/after preview to check quality
-5. **Process**: Click process to optimize your images
-6. **Find outputs**: Processed images are saved to your Downloads folder by default
+2. **Stay on Single Image tab**: The default tab for quick processing
+3. **Add image**: Drag and drop a single image or click "Select Image"
+4. **Select preset**: Choose your desired output profile
+5. **Process**: Click "Process Image" to optimize
+6. **Find output**: Processed image is saved to your selected folder
+
+### Batch Processing
+1. **Launch the application**: Run `python main.py` or `footfix` command
+2. **Switch to Batch Processing tab**: For multiple images
+3. **Add images**: Use any of these methods:
+   - Click "Add Images" to select multiple files
+   - Click "Add Folder" to add all images from a directory
+   - Drag and drop multiple files or folders onto the window
+4. **Manage queue**: Review and remove unwanted images if needed
+5. **Select preset**: Choose your output profile (applies to all images)
+6. **Start processing**: Click "Start Processing" and monitor progress
+7. **Find outputs**: All processed images are saved to your selected folder
 
 ### Supported Input Formats
 - JPEG (.jpg, .jpeg)
@@ -104,11 +129,16 @@ mypy footfix/
 ### Project Structure
 ```
 footfix/
-├── core/           # Image processing engine
-├── gui/            # PySide6 user interface
-├── presets/        # Processing profiles
-├── utils/          # Utility functions
-└── tests/          # Test suite
+├── core/                  # Image processing engine
+│   ├── processor.py       # Single image processing
+│   └── batch_processor.py # Batch processing with queue management
+├── gui/                   # PySide6 user interface
+│   ├── main_window.py     # Main application window with tabs
+│   └── batch_widget.py    # Batch processing UI widget
+├── presets/               # Processing profiles
+│   └── profiles.py        # Preset configurations
+├── utils/                 # Utility functions
+└── tests/                 # Test suite
 ```
 
 ## Contributing

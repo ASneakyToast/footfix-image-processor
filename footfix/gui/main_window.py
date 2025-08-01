@@ -12,13 +12,16 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QFileDialog,
     QMessageBox, QGroupBox, QLineEdit, QTextEdit,
-    QProgressBar
+    QProgressBar, QTabWidget, QDialog
 )
-from PySide6.QtCore import Qt, QThread, Signal, QMimeData
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QPixmap
+from PySide6.QtCore import Qt, QThread, Signal, QMimeData, QUrl
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QPixmap, QPalette
 
 from ..core.processor import ImageProcessor
-from ..presets.profiles import PRESET_REGISTRY, get_preset
+from ..presets.profiles import PRESET_REGISTRY, get_preset, PresetConfig
+from .batch_widget import BatchProcessingWidget
+from .preview_widget import PreviewWidget
+from .settings_dialog import AdvancedSettingsDialog
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +77,8 @@ class MainWindow(QMainWindow):
         self.current_image_path: Optional[Path] = None
         self.output_folder = Path.home() / "Downloads"
         self.processing_thread: Optional[ProcessingThread] = None
+        self.preview_window = None
+        self.custom_settings = None  # Store custom settings from advanced dialog
         
         self.setup_ui()
         self.setup_logging()
@@ -81,7 +86,7 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """Set up the user interface."""
         self.setWindowTitle("FootFix - Image Processor")
-        self.setMinimumSize(800, 600)
+        self.setMinimumSize(900, 700)
         
         # Central widget and main layout
         central_widget = QWidget()
@@ -101,6 +106,20 @@ class MainWindow(QMainWindow):
         subtitle_label = QLabel("Batch Image Processor for Editorial Teams")
         subtitle_label.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(subtitle_label)
+        
+        # Create tab widget for single and batch processing
+        self.tab_widget = QTabWidget()
+        main_layout.addWidget(self.tab_widget)
+        
+        # Single processing tab
+        single_tab = QWidget()
+        single_layout = QVBoxLayout(single_tab)
+        self.tab_widget.addTab(single_tab, "Single Image")
+        
+        # Batch processing tab
+        self.batch_widget = BatchProcessingWidget()
+        self.batch_widget.processing_completed.connect(self.on_batch_completed)
+        self.tab_widget.addTab(self.batch_widget, "Batch Processing")
         
         # File selection area
         file_group = QGroupBox("Image Selection")
@@ -131,7 +150,7 @@ class MainWindow(QMainWindow):
         file_layout.addWidget(self.selected_file_label)
         
         file_group.setLayout(file_layout)
-        main_layout.addWidget(file_group)
+        single_layout.addWidget(file_group)
         
         # Preset selection
         preset_group = QGroupBox("Processing Options")
@@ -146,9 +165,57 @@ class MainWindow(QMainWindow):
         self.preset_combo.addItem("Email (Max 600px width, <100KB)", "email")
         self.preset_combo.addItem("Instagram Story (1080×1920)", "instagram_story")
         self.preset_combo.addItem("Instagram Feed Portrait (1080×1350)", "instagram_feed_portrait")
+        
+        # Add tooltips for each preset
+        self.preset_combo.setItemData(0, 
+            "Optimized for web articles and galleries.\n"
+            "Maximum dimensions: 2560×1440 pixels\n"
+            "Target file size: 0.5-1MB\n"
+            "Perfect for editorial content and blog posts.",
+            Qt.ToolTipRole
+        )
+        self.preset_combo.setItemData(1,
+            "Small file size for email attachments.\n"
+            "Maximum width: 600 pixels\n"
+            "Target file size: <100KB\n"
+            "Ensures images load quickly in email clients.",
+            Qt.ToolTipRole
+        )
+        self.preset_combo.setItemData(2,
+            "Instagram Stories format.\n"
+            "Exact dimensions: 1080×1920 pixels (9:16)\n"
+            "Images will be cropped to fit if needed.\n"
+            "Optimized for mobile viewing.",
+            Qt.ToolTipRole
+        )
+        self.preset_combo.setItemData(3,
+            "Instagram Feed portrait format.\n"
+            "Exact dimensions: 1080×1350 pixels (4:5)\n"
+            "Images will be cropped to fit if needed.\n"
+            "Ideal for Instagram posts.",
+            Qt.ToolTipRole
+        )
+        
+        # Connect to show description on hover
+        self.preset_combo.currentIndexChanged.connect(self.update_preset_description)
+        
         preset_h_layout.addWidget(self.preset_combo, 1)
         
+        # Advanced settings button
+        self.advanced_button = QPushButton("Advanced...")
+        self.advanced_button.clicked.connect(self.show_advanced_settings)
+        preset_h_layout.addWidget(self.advanced_button)
+        
         preset_layout.addLayout(preset_h_layout)
+        
+        # Preset description
+        self.preset_description = QLabel()
+        self.preset_description.setWordWrap(True)
+        self.preset_description.setStyleSheet("color: #666; padding: 5px;")
+        preset_layout.addWidget(self.preset_description)
+        
+        # Initialize with first preset description
+        self.update_preset_description(0)
         
         # Output folder selection
         output_h_layout = QHBoxLayout()
@@ -165,7 +232,26 @@ class MainWindow(QMainWindow):
         preset_layout.addLayout(output_h_layout)
         
         preset_group.setLayout(preset_layout)
-        main_layout.addWidget(preset_group)
+        single_layout.addWidget(preset_group)
+        
+        # Process buttons
+        process_button_layout = QHBoxLayout()
+        
+        # Preview button
+        self.preview_button = QPushButton("Preview")
+        self.preview_button.clicked.connect(self.show_preview)
+        self.preview_button.setEnabled(False)
+        self.preview_button.setMinimumHeight(40)
+        self.preview_button.setStyleSheet("""
+            QPushButton {
+                font-size: 16px;
+            }
+            QPushButton:enabled {
+                background-color: #28a745;
+                color: white;
+            }
+        """)
+        process_button_layout.addWidget(self.preview_button)
         
         # Process button
         self.process_button = QPushButton("Process Image")
@@ -182,12 +268,14 @@ class MainWindow(QMainWindow):
                 color: white;
             }
         """)
-        main_layout.addWidget(self.process_button)
+        process_button_layout.addWidget(self.process_button)
+        
+        single_layout.addLayout(process_button_layout)
         
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
-        main_layout.addWidget(self.progress_bar)
+        single_layout.addWidget(self.progress_bar)
         
         # Status/Log area
         log_group = QGroupBox("Status")
@@ -226,14 +314,75 @@ class MainWindow(QMainWindow):
     def dragEnterEvent(self, event: QDragEnterEvent):
         """Handle drag enter events."""
         if event.mimeData().hasUrls():
-            event.acceptProposedAction()
+            # Check if any URL is a valid image or directory
+            for url in event.mimeData().urls():
+                path = Path(url.toLocalFile())
+                if path.is_dir() or path.suffix.lower() in ImageProcessor.SUPPORTED_FORMATS:
+                    event.acceptProposedAction()
+                    # Visual feedback
+                    self.drop_area.setStyleSheet("""
+                        QLabel {
+                            border: 2px solid #007AFF;
+                            border-radius: 10px;
+                            padding: 20px;
+                            background-color: #e6f2ff;
+                        }
+                    """)
+                    return
             
     def dropEvent(self, event: QDropEvent):
         """Handle drop events."""
+        # Reset visual feedback
+        self.drop_area.setStyleSheet("""
+            QLabel {
+                border: 2px dashed #aaa;
+                border-radius: 10px;
+                padding: 20px;
+                background-color: #f0f0f0;
+            }
+        """)
+        
         urls = event.mimeData().urls()
-        if urls:
-            file_path = urls[0].toLocalFile()
-            self.load_image(file_path)
+        if not urls:
+            return
+            
+        # Collect all valid image paths
+        image_paths = []
+        
+        for url in urls:
+            path = Path(url.toLocalFile())
+            
+            if path.is_file() and path.suffix.lower() in ImageProcessor.SUPPORTED_FORMATS:
+                image_paths.append(path)
+            elif path.is_dir():
+                # Add all images from directory
+                for img_path in path.rglob('*'):
+                    if img_path.is_file() and img_path.suffix.lower() in ImageProcessor.SUPPORTED_FORMATS:
+                        image_paths.append(img_path)
+                        
+        if not image_paths:
+            QMessageBox.warning(
+                self,
+                "No Valid Images",
+                "No valid image files were found in the dropped items."
+            )
+            return
+            
+        # Handle based on number of images
+        if len(image_paths) == 1:
+            # Single image - load in single processing tab
+            self.load_image(str(image_paths[0]))
+            self.tab_widget.setCurrentIndex(0)  # Switch to single tab
+        else:
+            # Multiple images - add to batch queue
+            added = self.batch_widget.add_images_to_queue(image_paths)
+            if added > 0:
+                self.tab_widget.setCurrentIndex(1)  # Switch to batch tab
+                QMessageBox.information(
+                    self,
+                    "Images Added",
+                    f"Added {added} images to batch processing queue."
+                )
             
     def select_image(self):
         """Open file dialog to select an image."""
@@ -255,6 +404,7 @@ class MainWindow(QMainWindow):
             self.current_image_path = path
             self.selected_file_label.setText(f"Selected: {path.name}")
             self.process_button.setEnabled(True)
+            self.preview_button.setEnabled(True)
             
             # Update drop area with image info
             info = self.processor.get_image_info()
@@ -339,3 +489,138 @@ class MainWindow(QMainWindow):
                 "Processing Failed",
                 f"Failed to process image:\n{message}"
             )
+            
+    def dragLeaveEvent(self, event):
+        """Handle drag leave events."""
+        # Reset visual feedback
+        self.drop_area.setStyleSheet("""
+            QLabel {
+                border: 2px dashed #aaa;
+                border-radius: 10px;
+                padding: 20px;
+                background-color: #f0f0f0;
+            }
+        """)
+        
+    def on_batch_completed(self, results: dict):
+        """Handle batch processing completion."""
+        logger.info(f"Batch processing completed: {results}")
+        
+    def show_preview(self):
+        """Show the preview window for the current image and preset."""
+        if not self.current_image_path or not self.processor.current_image:
+            return
+            
+        # Get selected preset
+        preset_name = self.preset_combo.currentData()
+        preset = get_preset(preset_name)
+        
+        if not preset:
+            QMessageBox.critical(self, "Error", "Invalid preset selected")
+            return
+            
+        # Create preview window if it doesn't exist
+        if not self.preview_window:
+            self.preview_window = QWidget()
+            self.preview_window.setWindowTitle("FootFix - Preview")
+            self.preview_window.setMinimumSize(1000, 700)
+            
+            # Add preview widget
+            layout = QVBoxLayout(self.preview_window)
+            self.preview_widget = PreviewWidget()
+            layout.addWidget(self.preview_widget)
+            
+            # Connect signals
+            self.preview_widget.apply_settings.connect(self.on_preview_apply)
+            self.preview_widget.adjust_settings.connect(self.on_preview_adjust)
+            
+        # Load image and preset into preview
+        self.preview_widget.load_image(self.processor, preset)
+        
+        # Show the window
+        self.preview_window.show()
+        self.preview_window.raise_()
+        self.preview_window.activateWindow()
+        
+    def on_preview_apply(self):
+        """Handle apply settings from preview."""
+        # Close preview window
+        if self.preview_window:
+            self.preview_window.close()
+            
+        # Process the image
+        self.process_image()
+        
+    def on_preview_adjust(self):
+        """Handle adjust settings from preview."""
+        # Close preview and show advanced settings
+        if self.preview_window:
+            self.preview_window.close()
+            
+        self.show_advanced_settings()
+        
+    def show_advanced_settings(self):
+        """Show the advanced settings dialog."""
+        # Get current preset config
+        preset_name = self.preset_combo.currentData()
+        preset = get_preset(preset_name)
+        preset_config = preset.get_config() if preset else None
+        
+        # Create and show dialog
+        dialog = AdvancedSettingsDialog(self, preset_config)
+        dialog.settings_applied.connect(self.on_custom_settings_applied)
+        
+        if dialog.exec() == QDialog.Accepted:
+            self.custom_settings = dialog.get_settings()
+            logger.info(f"Custom settings applied: {self.custom_settings}")
+            
+            # Update UI to indicate custom settings are active
+            self.preset_combo.setItemText(
+                self.preset_combo.currentIndex(),
+                f"{self.preset_combo.itemText(self.preset_combo.currentIndex())} (Modified)"
+            )
+            
+    def on_custom_settings_applied(self, settings: dict):
+        """Handle custom settings from advanced dialog."""
+        self.custom_settings = settings
+        logger.info(f"Custom settings preview: {settings}")
+        
+        # If preview window is open, update it
+        if self.preview_window and self.preview_window.isVisible():
+            # Create a custom preset config from settings
+            custom_config = self._create_custom_preset_config(settings)
+            self.preview_widget.current_preset = custom_config
+            self.preview_widget.generate_preview()
+            
+    def _create_custom_preset_config(self, settings: dict) -> PresetConfig:
+        """Create a PresetConfig from custom settings."""
+        config = PresetConfig(name="Custom")
+        
+        # Apply resize settings
+        resize_mode = settings.get('resize_mode', 'fit')
+        if resize_mode == 'exact':
+            config.exact_width = settings.get('width')
+            config.exact_height = settings.get('height')
+            config.maintain_aspect = False
+        elif resize_mode == 'fit':
+            config.max_width = settings.get('width')
+            config.max_height = settings.get('height')
+            config.maintain_aspect = settings.get('maintain_aspect', True)
+            
+        # Apply format and quality
+        config.format = settings.get('format', 'JPEG')
+        config.quality = settings.get('quality', 85)
+        
+        # Apply file size settings
+        if 'target_size_kb' in settings:
+            config.target_size_kb = settings['target_size_kb']
+            config.min_size_kb = settings.get('min_size_kb')
+            config.max_size_kb = settings.get('max_size_kb')
+            
+        return config
+        
+    def update_preset_description(self, index: int):
+        """Update the preset description label."""
+        tooltip = self.preset_combo.itemData(index, Qt.ToolTipRole)
+        if tooltip:
+            self.preset_description.setText(tooltip.replace('\n', ' '))
