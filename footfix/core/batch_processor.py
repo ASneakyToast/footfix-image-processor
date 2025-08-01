@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import gc
+import os
 
 from .processor import ImageProcessor
 from ..presets.profiles import PresetProfile, get_preset
@@ -77,6 +79,11 @@ class BatchProcessor:
         self._processing_lock = threading.Lock()
         self._progress_callbacks: List[Callable[[BatchProgress], None]] = []
         self._item_complete_callbacks: List[Callable[[BatchItem], None]] = []
+        
+        # Memory management settings
+        self.memory_limit_mb = 2048  # Default 2GB limit
+        self.enable_memory_optimization = True
+        self.images_per_gc = 5  # Run garbage collection every N images
         
     def add_image(self, image_path: Path) -> bool:
         """
@@ -194,6 +201,39 @@ class BatchProcessor:
             except Exception as e:
                 logger.error(f"Error in item complete callback: {e}")
                 
+    def _check_memory_usage(self):
+        """Check and manage memory usage during processing."""
+        try:
+            # Get current process memory usage
+            import resource
+            memory_usage_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            
+            # On macOS, ru_maxrss is in bytes, on Linux it's in KB
+            if os.name == 'posix' and os.uname().sysname == 'Darwin':
+                memory_usage_mb = memory_usage_mb / 1024 / 1024
+            else:
+                memory_usage_mb = memory_usage_mb / 1024
+                
+            logger.debug(f"Current memory usage: {memory_usage_mb:.1f} MB")
+            
+            # If approaching limit, force garbage collection
+            if memory_usage_mb > self.memory_limit_mb * 0.8:
+                logger.warning(f"Memory usage high ({memory_usage_mb:.1f} MB), running garbage collection")
+                gc.collect()
+                
+        except Exception as e:
+            logger.debug(f"Could not check memory usage: {e}")
+            
+    def set_memory_limit(self, limit_mb: int):
+        """Set the memory limit for batch processing."""
+        self.memory_limit_mb = limit_mb
+        logger.info(f"Memory limit set to {limit_mb} MB")
+        
+    def set_memory_optimization(self, enabled: bool):
+        """Enable or disable memory optimization."""
+        self.enable_memory_optimization = enabled
+        logger.info(f"Memory optimization {'enabled' if enabled else 'disabled'}")
+                
     def process_batch(self, preset_name: str, output_folder: Path) -> Dict[str, Any]:
         """
         Process all images in the queue with the specified preset.
@@ -243,6 +283,10 @@ class BatchProcessor:
             try:
                 processor = ImageProcessor()
                 
+                # Check memory before loading
+                if self.enable_memory_optimization:
+                    self._check_memory_usage()
+                
                 # Load image
                 if not processor.load_image(item.source_path):
                     raise Exception("Failed to load image")
@@ -279,6 +323,11 @@ class BatchProcessor:
             # Notify callbacks
             self._notify_item_complete(item)
             self._notify_progress()
+            
+            # Periodic garbage collection for memory optimization
+            if self.enable_memory_optimization and (index + 1) % self.images_per_gc == 0:
+                gc.collect()
+                logger.debug(f"Garbage collection performed after {index + 1} images")
             
         # Final progress update
         self.progress.elapsed_time = time.time() - start_time

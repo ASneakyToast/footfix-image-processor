@@ -12,16 +12,22 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QFileDialog,
     QMessageBox, QGroupBox, QLineEdit, QTextEdit,
-    QProgressBar, QTabWidget, QDialog
+    QProgressBar, QTabWidget, QDialog, QApplication
 )
 from PySide6.QtCore import Qt, QThread, Signal, QMimeData, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QPixmap, QPalette
 
 from ..core.processor import ImageProcessor
 from ..presets.profiles import PRESET_REGISTRY, get_preset, PresetConfig
+from ..utils.filename_template import FilenameTemplate
+from ..utils.preferences import PreferencesManager
+from ..utils.notifications import NotificationManager
 from .batch_widget import BatchProcessingWidget
 from .preview_widget import PreviewWidget
 from .settings_dialog import AdvancedSettingsDialog
+from .menu_bar import MenuBarManager
+from .output_settings_dialog import OutputSettingsDialog
+from .preferences_window import PreferencesWindow
 
 logger = logging.getLogger(__name__)
 
@@ -75,13 +81,20 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.processor = ImageProcessor()
         self.current_image_path: Optional[Path] = None
-        self.output_folder = Path.home() / "Downloads"
         self.processing_thread: Optional[ProcessingThread] = None
         self.preview_window = None
         self.custom_settings = None  # Store custom settings from advanced dialog
+        self.filename_template = FilenameTemplate()
+        
+        # Initialize preferences and notifications
+        self.prefs_manager = PreferencesManager()
+        self.notification_manager = NotificationManager()
+        self.load_preferences()
         
         self.setup_ui()
+        self.setup_menu_bar()
         self.setup_logging()
+        self.restore_window_state()
         
     def setup_ui(self):
         """Set up the user interface."""
@@ -229,6 +242,11 @@ class MainWindow(QMainWindow):
         browse_button.clicked.connect(self.select_output_folder)
         output_h_layout.addWidget(browse_button)
         
+        # Output settings button
+        output_settings_button = QPushButton("Settings...")
+        output_settings_button.clicked.connect(self.show_output_settings)
+        output_h_layout.addWidget(output_settings_button)
+        
         preset_layout.addLayout(output_h_layout)
         
         preset_group.setLayout(preset_layout)
@@ -238,7 +256,7 @@ class MainWindow(QMainWindow):
         process_button_layout = QHBoxLayout()
         
         # Preview button
-        self.preview_button = QPushButton("Preview")
+        self.preview_button = QPushButton("Preview (Space)")
         self.preview_button.clicked.connect(self.show_preview)
         self.preview_button.setEnabled(False)
         self.preview_button.setMinimumHeight(40)
@@ -291,6 +309,24 @@ class MainWindow(QMainWindow):
         
         # Enable drag and drop
         self.setAcceptDrops(True)
+        
+    def setup_menu_bar(self):
+        """Set up the application menu bar."""
+        self.menu_manager = MenuBarManager(self)
+        
+        # Connect menu signals
+        self.menu_manager.open_file.connect(self.select_image)
+        self.menu_manager.open_folder.connect(self.select_folder)
+        self.menu_manager.save_as.connect(self.save_as)
+        self.menu_manager.show_preferences.connect(self.show_preferences)
+        self.menu_manager.quit_app.connect(QApplication.quit)
+        
+        self.menu_manager.show_preview.connect(self.show_preview)
+        self.menu_manager.toggle_fullscreen.connect(self.toggle_fullscreen)
+        
+        self.menu_manager.show_help.connect(self.show_help)
+        self.menu_manager.show_shortcuts.connect(self.show_shortcuts)
+        self.menu_manager.show_about.connect(self.show_about)
         
     def setup_logging(self):
         """Set up logging to display in the GUI."""
@@ -414,6 +450,15 @@ class MainWindow(QMainWindow):
                 f"Format: {info.get('format', 'Unknown')}"
             )
             
+            # Update menu bar actions
+            self.menu_manager.enable_image_actions(True)
+            
+            # Update recent files in preferences
+            self.prefs_manager.update_recent('files', str(path))
+            self.recent_files = self.prefs_manager.get('recent.files', [])
+            self.menu_manager._update_recent_files(self.recent_files)
+            self.prefs_manager.save()
+            
             logger.info(f"Image loaded: {path.name}")
         else:
             QMessageBox.warning(
@@ -448,9 +493,29 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", "Invalid preset selected")
             return
             
-        # Generate output filename
-        output_filename = preset.get_suggested_filename(self.current_image_path)
+        # Generate output filename using template
+        image_info = self.processor.get_image_info()
+        output_filename = self.filename_template.generate_filename(
+            self.current_image_path,
+            self.output_settings['filename_template'],
+            preset_name,
+            image_info
+        )
         output_path = self.output_folder / output_filename
+        
+        # Handle duplicates according to strategy
+        output_path = self.filename_template.check_duplicate(
+            output_path,
+            self.output_settings['duplicate_strategy']
+        )
+        
+        if output_path is None:  # Skip strategy and file exists
+            QMessageBox.information(
+                self,
+                "File Skipped",
+                f"File already exists and skip strategy is selected:\n{output_filename}"
+            )
+            return
         
         # Disable UI during processing
         self.process_button.setEnabled(False)
@@ -474,6 +539,18 @@ class MainWindow(QMainWindow):
         """Handle processing completion."""
         self.progress_bar.setVisible(False)
         self.process_button.setEnabled(True)
+        
+        # Show notification if enabled and window is not in focus
+        if self.prefs_manager.get('processing.completion_notification', True):
+            self.notification_manager.set_sound_enabled(
+                self.prefs_manager.get('processing.completion_sound', True)
+            )
+            
+            if self.current_image_path:
+                self.notification_manager.show_single_completion(
+                    self.current_image_path.name,
+                    success
+                )
         
         if success:
             logger.info(message)
@@ -624,3 +701,268 @@ class MainWindow(QMainWindow):
         tooltip = self.preset_combo.itemData(index, Qt.ToolTipRole)
         if tooltip:
             self.preset_description.setText(tooltip.replace('\n', ' '))
+            
+    def select_folder(self):
+        """Open folder dialog to select images for batch processing."""
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select Folder with Images",
+            str(Path.home())
+        )
+        
+        if folder:
+            # Find all images in the folder
+            folder_path = Path(folder)
+            image_paths = []
+            
+            for ext in ImageProcessor.SUPPORTED_FORMATS:
+                image_paths.extend(folder_path.glob(f'*{ext}'))
+                image_paths.extend(folder_path.glob(f'*{ext.upper()}'))
+                
+            if image_paths:
+                # Add to batch queue
+                added = self.batch_widget.add_images_to_queue(image_paths)
+                if added > 0:
+                    self.tab_widget.setCurrentIndex(1)  # Switch to batch tab
+                    QMessageBox.information(
+                        self,
+                        "Folder Added",
+                        f"Added {added} images from folder to batch processing queue."
+                    )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "No Images Found",
+                    f"No supported image files found in:\n{folder}"
+                )
+                
+    def save_as(self):
+        """Save the processed image with a custom name."""
+        if not self.current_image_path or not self.processor.current_image:
+            return
+            
+        # Get selected preset
+        preset_name = self.preset_combo.currentData()
+        preset = get_preset(preset_name)
+        
+        if not preset:
+            return
+            
+        # Suggest filename
+        suggested_name = preset.get_suggested_filename(self.current_image_path)
+        
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Image As",
+            str(self.output_folder / suggested_name),
+            "JPEG Files (*.jpg *.jpeg);;PNG Files (*.png);;All Files (*.*)"
+        )
+        
+        if file_path:
+            # Process and save
+            output_path = Path(file_path)
+            self.output_folder = output_path.parent  # Update output folder
+            self.output_folder_edit.setText(str(self.output_folder))
+            
+            # Start processing with custom path
+            self.processing_thread = ProcessingThread(
+                self.processor,
+                preset_name,
+                str(output_path)
+            )
+            
+            self.processing_thread.progress.connect(self.progress_bar.setValue)
+            self.processing_thread.status.connect(lambda msg: logger.info(msg))
+            self.processing_thread.finished_processing.connect(self.on_processing_finished)
+            
+            self.progress_bar.setVisible(True)
+            self.processing_thread.start()
+            
+        
+    def toggle_fullscreen(self):
+        """Toggle fullscreen mode."""
+        if self.isFullScreen():
+            self.showNormal()
+            self.menu_manager.update_fullscreen_text(False)
+        else:
+            self.showFullScreen()
+            self.menu_manager.update_fullscreen_text(True)
+            
+    def show_help(self):
+        """Show the help documentation."""
+        help_text = """
+        <h2>FootFix Help</h2>
+        
+        <h3>Getting Started</h3>
+        <p>FootFix is a professional image processor designed for editorial teams.</p>
+        
+        <h3>Processing Images</h3>
+        <ol>
+        <li>Drag and drop an image or click "Select Image"</li>
+        <li>Choose a preset or adjust settings</li>
+        <li>Click "Process Image" to save</li>
+        </ol>
+        
+        <h3>Batch Processing</h3>
+        <p>Switch to the "Batch Processing" tab to process multiple images at once.</p>
+        
+        <h3>Keyboard Shortcuts</h3>
+        <p>Press Cmd+? to see all keyboard shortcuts.</p>
+        """
+        
+        msg = QMessageBox(self)
+        msg.setWindowTitle("FootFix Help")
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(help_text)
+        msg.exec()
+        
+    def show_shortcuts(self):
+        """Show keyboard shortcuts reference."""
+        shortcuts_text = """
+        <h2>Keyboard Shortcuts</h2>
+        
+        <h3>File Operations</h3>
+        <table>
+        <tr><td><b>Cmd+O</b></td><td>Open image</td></tr>
+        <tr><td><b>Cmd+Shift+O</b></td><td>Open folder</td></tr>
+        <tr><td><b>Cmd+Shift+S</b></td><td>Save as...</td></tr>
+        <tr><td><b>Cmd+Q</b></td><td>Quit</td></tr>
+        </table>
+        
+        <h3>View</h3>
+        <table>
+        <tr><td><b>Space</b></td><td>Show preview</td></tr>
+        <tr><td><b>Cmd+Ctrl+F</b></td><td>Toggle fullscreen</td></tr>
+        </table>
+        
+        <h3>Edit</h3>
+        <table>
+        <tr><td><b>Cmd+,</b></td><td>Preferences</td></tr>
+        <tr><td><b>Cmd+A</b></td><td>Select all</td></tr>
+        <tr><td><b>Cmd+C</b></td><td>Copy</td></tr>
+        <tr><td><b>Cmd+V</b></td><td>Paste</td></tr>
+        </table>
+        
+        <h3>Recent Files</h3>
+        <table>
+        <tr><td><b>Cmd+1-9</b></td><td>Open recent file</td></tr>
+        </table>
+        """
+        
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Keyboard Shortcuts")
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(shortcuts_text)
+        msg.exec()
+        
+    def show_about(self):
+        """Show about dialog."""
+        about_text = """
+        <h2>FootFix</h2>
+        <p><b>Version 1.0.0</b></p>
+        <p>Professional image processor for editorial teams.</p>
+        <br>
+        <p>Optimized for:</p>
+        <ul>
+        <li>Web content optimization</li>
+        <li>Email attachments</li>
+        <li>Social media formats</li>
+        <li>Batch processing</li>
+        </ul>
+        <br>
+        <p>© 2024 FootFix. All rights reserved.</p>
+        """
+        
+        msg = QMessageBox(self)
+        msg.setWindowTitle("About FootFix")
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(about_text)
+        msg.exec()
+        
+    def keyPressEvent(self, event):
+        """Handle key press events."""
+        # Space key for preview
+        if event.key() == Qt.Key_Space and self.preview_button.isEnabled():
+            self.show_preview()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+            
+    def show_output_settings(self):
+        """Show the output settings dialog."""
+        dialog = OutputSettingsDialog(self, self.output_settings)
+        
+        if dialog.exec() == QDialog.Accepted:
+            self.output_settings = dialog.get_settings()
+            self.output_folder = self.output_settings['output_folder']
+            self.output_folder_edit.setText(str(self.output_folder))
+            
+            # Reset filename template counter for new batch
+            self.filename_template.reset_counter()
+            
+            logger.info(f"Output settings updated: {self.output_settings}")
+            
+    def load_preferences(self):
+        """Load preferences from the preferences manager."""
+        self.output_folder = Path(self.prefs_manager.get('output.default_folder', Path.home() / "Downloads"))
+        self.recent_files = self.prefs_manager.get('recent.files', [])
+        
+        self.output_settings = {
+            'output_folder': self.output_folder,
+            'filename_template': self.prefs_manager.get('output.filename_template', '{original_name}_{preset}'),
+            'duplicate_strategy': self.prefs_manager.get('output.duplicate_strategy', 'rename'),
+            'recent_folders': self.prefs_manager.get('output.recent_folders', []),
+            'favorite_folders': self.prefs_manager.get('output.favorite_folders', [])
+        }
+        
+    def restore_window_state(self):
+        """Restore window geometry and state from preferences."""
+        geometry = self.prefs_manager.get('interface.window_geometry')
+        if geometry:
+            try:
+                self.restoreGeometry(bytes.fromhex(geometry))
+            except:
+                pass
+                
+        state = self.prefs_manager.get('interface.window_state')
+        if state:
+            try:
+                self.restoreState(bytes.fromhex(state))
+            except:
+                pass
+                
+    def save_window_state(self):
+        """Save window geometry and state to preferences."""
+        self.prefs_manager.set('interface.window_geometry', self.saveGeometry().toHex().data().decode())
+        self.prefs_manager.set('interface.window_state', self.saveState().toHex().data().decode())
+        self.prefs_manager.save()
+        
+    def closeEvent(self, event):
+        """Handle window close event."""
+        self.save_window_state()
+        super().closeEvent(event)
+        
+    def show_preferences(self):
+        """Show the preferences window."""
+        prefs_window = PreferencesWindow(self)
+        prefs_window.preferences_changed.connect(self.on_preferences_changed)
+        
+        if prefs_window.exec() == QDialog.Accepted:
+            self.on_preferences_changed()
+            
+    def on_preferences_changed(self):
+        """Handle preferences changes."""
+        # Reload preferences
+        self.load_preferences()
+        
+        # Update UI elements
+        self.output_folder_edit.setText(str(self.output_folder))
+        self.menu_manager._update_recent_files(self.recent_files)
+        
+        # Apply interface preferences
+        show_tooltips = self.prefs_manager.get('interface.show_tooltips', True)
+        if not show_tooltips:
+            # Disable tooltips (would need to implement tooltip management)
+            pass
+            
+        logger.info("Preferences updated")

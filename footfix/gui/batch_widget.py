@@ -17,6 +17,8 @@ from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QIcon
 
 from ..core.batch_processor import BatchProcessor, BatchItem, BatchProgress, ProcessingStatus
+from ..utils.notifications import NotificationManager
+from ..utils.preferences import PreferencesManager
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,15 @@ class BatchProcessingWidget(QWidget):
         self.batch_processor = BatchProcessor()
         self.processing_thread: Optional[BatchProcessingThread] = None
         self.is_processing = False
+        
+        # Initialize notification manager and preferences
+        self.notification_manager = NotificationManager()
+        self.prefs_manager = PreferencesManager()
+        
+        # Apply memory optimization settings from preferences
+        memory_limit = self.prefs_manager.get('advanced.memory_limit_mb', 2048)
+        self.batch_processor.set_memory_limit(memory_limit)
+        self.batch_processor.set_memory_optimization(True)
         
         self.setup_ui()
         
@@ -433,6 +444,21 @@ class BatchProcessingWidget(QWidget):
             f"Failed: {results.get('failed', 0)}\n"
             f"Time elapsed: {self._format_time(results.get('elapsed_time', 0))}"
         )
+        
+        # Show system notification if enabled
+        if self.prefs_manager.get('processing.completion_notification', True):
+            # Update notification manager settings
+            self.notification_manager.set_sound_enabled(
+                self.prefs_manager.get('processing.completion_sound', True)
+            )
+            
+            # Show notification
+            if not results.get('cancelled'):
+                self.notification_manager.show_batch_completion(
+                    successful=results.get('successful', 0),
+                    failed=results.get('failed', 0),
+                    elapsed_time=results.get('elapsed_time', 0)
+                )
         
         if results.get('success'):
             QMessageBox.information(self, "Processing Complete", message)
