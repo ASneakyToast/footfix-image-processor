@@ -13,3 +13,4 @@ mypy>=1.5.0
 # Packaging
 setuptools>=68.0.0
 wheel>=0.41.0
+py2app>=0.28.0  # macOS app bundling
