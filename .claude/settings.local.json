@@ -4,7 +4,8 @@
     "allow": [
       "Bash(mkdir:*)",
       "Bash(find:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(mv:*)"
     ],
     "deny": []
   }

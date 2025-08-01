@@ -10,11 +10,11 @@ rm -rf FootFix.app FootFix.dmg
 
 # Install requirements
 echo "📦 Installing requirements..."
-pip install -r requirements.txt
+pip install -r ../requirements.txt
 
 # Run tests first
 echo "🧪 Running tests..."
-python -m pytest footfix/tests/ -v
+python -m pytest ../tests/ -v
 if [ $? -ne 0 ]; then
     echo "❌ Tests failed! Fix issues before building."
     exit 1
