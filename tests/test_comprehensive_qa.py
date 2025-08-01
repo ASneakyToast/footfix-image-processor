@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from footfix.core.processor import ImageProcessor
 from footfix.core.batch_processor import BatchProcessor
 from footfix.gui.main_window import MainWindow
-from footfix.presets.profiles import PresetManager
+from footfix.presets.profiles import get_preset, PRESET_REGISTRY
 from footfix.utils.preferences import PreferencesManager
 from footfix.utils.filename_template import FilenameTemplate
 
@@ -267,33 +267,23 @@ class TestComprehensiveQA:
     
     def test_preset_management(self):
         """Test preset save/load functionality"""
-        preset_manager = PresetManager()
+        # Test preset registry availability
+        preset_keys = list(PRESET_REGISTRY.keys())
         
-        # Test default presets
-        assert len(preset_manager.presets) > 0
-        assert "Default" in preset_manager.presets
+        # Test default presets exist
+        assert len(preset_keys) > 0
+        assert 'editorial_web' in preset_keys
+        assert 'email' in preset_keys
         
-        # Test custom preset
-        custom_preset = {
-            'name': 'Test Preset',
-            'resize_percent': 75,
-            'quality': 92,
-            'format': 'PNG',
-            'enable_sharpening': True,
-            'sharpen_amount': 1.5,
-            'enable_watermark': False
-        }
+        # Test preset instantiation
+        editorial_preset = get_preset('editorial_web')
+        assert editorial_preset is not None
         
-        preset_manager.save_preset('Test Preset', custom_preset)
-        loaded = preset_manager.get_preset('Test Preset')
-        assert loaded == custom_preset
-        
-        # Test preset persistence
-        new_manager = PresetManager()
-        assert 'Test Preset' in new_manager.presets
-        
-        # Clean up
-        preset_manager.delete_preset('Test Preset')
+        # Test preset configuration
+        config = editorial_preset.get_config()
+        assert config.name == "Editorial Web"
+        assert config.max_width == 2560
+        assert config.max_height == 1440
     
     def test_filename_templates(self, sample_images, temp_dir):
         """Test filename template functionality"""

@@ -9,7 +9,7 @@ from pathlib import Path
 from PIL import Image
 import os
 
-from ..presets.profiles import (
+from footfix.presets.profiles import (
     EditorialWebPreset,
     EmailPreset,
     InstagramStoryPreset,
@@ -17,7 +17,7 @@ from ..presets.profiles import (
     get_preset,
     PRESET_REGISTRY
 )
-from ..core.processor import ImageProcessor
+from footfix.core.processor import ImageProcessor
 
 
 class TestPresetProfiles(unittest.TestCase):

@@ -8,6 +8,8 @@ anthropic>=0.7.0  # Official Anthropic SDK (optional, for future use)
 # Development dependencies
 pytest>=7.4.0
 pytest-qt>=4.2.0
+pytest-asyncio>=0.21.0
+psutil>=5.9.0  # For performance testing and system monitoring
 black>=23.7.0
 flake8>=6.1.0
 mypy>=1.5.0
