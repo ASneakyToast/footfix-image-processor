@@ -80,6 +80,9 @@ def test_preset_processing():
     print("\n✓ All presets tested successfully")
 
 
+import pytest
+
+@pytest.mark.skip(reason="QApplication singleton conflict - needs GUI test isolation")
 def test_gui_features():
     """Test GUI features interactively."""
     print("\n=== Testing GUI Features ===")
