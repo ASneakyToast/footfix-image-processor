@@ -15,11 +15,11 @@ if sys.platform != 'darwin':
 
 # Application metadata
 APP_NAME = 'FootFix'
-APP_VERSION = '1.0.0'
+APP_VERSION = '1.1.0'
 APP_BUNDLE_ID = 'com.footfix.imageprocessor'
 
-# Main script
-APP = ['main.py']
+# Main script (relative to parent directory)
+APP = ['../main.py']
 
 # Data files to include
 DATA_FILES = []
@@ -79,6 +79,10 @@ OPTIONS = {
         'flake8',      # Linter
         'mypy',        # Type checker
         'tkinter',     # Not using tkinter
+        'setuptools._vendor',  # Exclude entire setuptools vendor directory
+        'setuptools._vendor.typing_extensions',  # Specifically exclude vendor typing_extensions
+        'setuptools.wheel',    # Avoid duplicate wheel package
+        'pkg_resources',       # Deprecated package
     ],
     'resources': [],
     'frameworks': [],
@@ -86,6 +90,7 @@ OPTIONS = {
     'optimize': 2,  # Optimize bytecode
     'compressed': True,  # Compress the app
     'semi_standalone': False,  # Fully standalone app
+    'no_strip': False,  # Strip binaries
 }
 
 # Setup configuration
