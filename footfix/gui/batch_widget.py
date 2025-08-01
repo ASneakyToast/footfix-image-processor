@@ -11,14 +11,18 @@ from datetime import timedelta
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
     QTableWidget, QTableWidgetItem, QHeaderView,
-    QProgressBar, QLabel, QFileDialog, QMessageBox
+    QProgressBar, QLabel, QFileDialog, QMessageBox,
+    QTabWidget, QCheckBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QIcon
 
 from ..core.batch_processor import BatchProcessor, BatchItem, BatchProgress, ProcessingStatus
+from ..core.alt_text_generator import AltTextStatus
 from ..utils.notifications import NotificationManager
 from ..utils.preferences import PreferencesManager
+from ..utils.alt_text_exporter import AltTextExporter, ExportFormat
+from .alt_text_widget import AltTextWidget
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +35,14 @@ class BatchProcessingThread(QThread):
     item_completed = Signal(object)    # BatchItem
     batch_completed = Signal(dict)     # Results dict
     status_message = Signal(str)
+    alt_text_progress = Signal(int, int, str)  # current, total, message
     
-    def __init__(self, batch_processor: BatchProcessor, preset_name: str, output_folder: Path):
+    def __init__(self, batch_processor: BatchProcessor, preset_name: str, output_folder: Path, generate_alt_text: bool = False):
         super().__init__()
         self.batch_processor = batch_processor
         self.preset_name = preset_name
         self.output_folder = output_folder
+        self.generate_alt_text = generate_alt_text
         self._is_cancelled = False
         
     def run(self):
@@ -48,7 +54,12 @@ class BatchProcessingThread(QThread):
             
             # Start processing
             self.status_message.emit(f"Starting batch processing with {self.preset_name} preset...")
-            results = self.batch_processor.process_batch(self.preset_name, self.output_folder)
+            
+            # Use appropriate processing method based on alt text setting
+            if self.generate_alt_text:
+                results = self.batch_processor.process_batch_with_alt_text(self.preset_name, self.output_folder)
+            else:
+                results = self.batch_processor.process_batch(self.preset_name, self.output_folder)
             
             # Emit completion
             self.batch_completed.emit(results)
@@ -106,6 +117,15 @@ class BatchProcessingWidget(QWidget):
         """Set up the user interface."""
         layout = QVBoxLayout(self)
         
+        # Tab widget for Image Processing and Alt Text
+        self.tab_widget = QTabWidget()
+        layout.addWidget(self.tab_widget)
+        
+        # Image Processing Tab
+        processing_tab = QWidget()
+        processing_layout = QVBoxLayout(processing_tab)
+        self.tab_widget.addTab(processing_tab, "Image Processing")
+        
         # Toolbar
         toolbar_layout = QHBoxLayout()
         
@@ -121,12 +141,19 @@ class BatchProcessingWidget(QWidget):
         self.clear_queue_btn.clicked.connect(self.clear_queue)
         toolbar_layout.addWidget(self.clear_queue_btn)
         
+        # Quick export button (only visible when alt text results are available)
+        self.quick_export_btn = QPushButton("Export Alt Text")
+        self.quick_export_btn.setToolTip("Quick export alt text results to CSV")
+        self.quick_export_btn.clicked.connect(self.quick_export_alt_text)
+        self.quick_export_btn.setVisible(False)
+        toolbar_layout.addWidget(self.quick_export_btn)
+        
         toolbar_layout.addStretch()
         
         self.queue_label = QLabel("0 images in queue")
         toolbar_layout.addWidget(self.queue_label)
         
-        layout.addLayout(toolbar_layout)
+        processing_layout.addLayout(toolbar_layout)
         
         # Image queue table
         self.queue_table = QTableWidget()
@@ -136,7 +163,7 @@ class BatchProcessingWidget(QWidget):
         self.queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.queue_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.queue_table.itemSelectionChanged.connect(self.on_selection_changed)
-        layout.addWidget(self.queue_table)
+        processing_layout.addWidget(self.queue_table)
         
         # Progress section
         progress_layout = QVBoxLayout()
@@ -166,7 +193,7 @@ class BatchProcessingWidget(QWidget):
         
         progress_layout.addLayout(time_layout)
         
-        layout.addLayout(progress_layout)
+        processing_layout.addLayout(progress_layout)
         
         # Control buttons
         control_layout = QHBoxLayout()
@@ -208,11 +235,74 @@ class BatchProcessingWidget(QWidget):
         self.cancel_btn.setMinimumHeight(40)
         control_layout.addWidget(self.cancel_btn)
         
-        layout.addLayout(control_layout)
+        processing_layout.addLayout(control_layout)
         
         # Timer for UI updates during processing
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_time_display)
+        
+        # Alt Text Tab
+        self.alt_text_widget = AltTextWidget()
+        self.alt_text_widget.alt_text_updated.connect(self.on_alt_text_updated)
+        self.alt_text_widget.regenerate_requested.connect(self.on_regenerate_requested)
+        self.tab_widget.addTab(self.alt_text_widget, "Alt Text")
+        
+        # Alt Text Generation Options (at bottom of main layout)
+        alt_text_options_layout = QHBoxLayout()
+        
+        self.enable_alt_text_cb = QCheckBox("Generate Alt Text")
+        self.enable_alt_text_cb.setToolTip(
+            "Enable automatic alt text generation using AI after image processing"
+        )
+        self.enable_alt_text_cb.toggled.connect(self.on_alt_text_toggled)
+        alt_text_options_layout.addWidget(self.enable_alt_text_cb)
+        
+        # Check if API key is configured
+        self.refresh_alt_text_availability()
+        
+        # Cost estimation label
+        self.cost_estimate_label = QLabel("")
+        self.cost_estimate_label.setStyleSheet("color: #666; margin-left: 10px;")
+        alt_text_options_layout.addWidget(self.cost_estimate_label)
+        
+        alt_text_options_layout.addStretch()
+        
+        self.alt_text_status_label = QLabel("")
+        alt_text_options_layout.addWidget(self.alt_text_status_label)
+        
+        layout.addLayout(alt_text_options_layout)
+        
+    def refresh_alt_text_availability(self):
+        """Refresh alt text checkbox availability based on API key configuration."""
+        logger.info("Refreshing alt text checkbox availability")
+        
+        # Create a fresh PreferencesManager instance to ensure we get the latest saved values
+        # This is important because the preferences dialog might have its own instance
+        fresh_prefs = PreferencesManager()
+        
+        api_key = fresh_prefs.get('alt_text.api_key')
+        logger.info(f"API key check: {'[REDACTED]' if api_key else '[EMPTY]'} (type: {type(api_key)})")
+        
+        if api_key and api_key.strip():
+            logger.info("API key found - enabling alt text checkbox")
+            self.enable_alt_text_cb.setEnabled(True)
+            self.enable_alt_text_cb.setToolTip(
+                "Enable automatic alt text generation using AI after image processing"
+            )
+            # Check the checkbox if it was previously selected
+            enabled_by_default = fresh_prefs.get('alt_text.enabled', False)
+            if enabled_by_default:
+                self.enable_alt_text_cb.setChecked(True)
+        else:
+            logger.info("No API key found - disabling alt text checkbox")
+            self.enable_alt_text_cb.setEnabled(False)
+            self.enable_alt_text_cb.setChecked(False)  # Uncheck if disabled
+            self.enable_alt_text_cb.setToolTip(
+                "Configure Anthropic API key in Preferences → Alt Text to enable alt text generation"
+            )
+            
+        # Update our instance's preferences manager too
+        self.prefs_manager = fresh_prefs
         
     def add_images(self):
         """Open dialog to select multiple images."""
@@ -339,6 +429,38 @@ class BatchProcessingWidget(QWidget):
         # Emit signal
         self.queue_changed.emit(queue_count)
         
+        # Update cost estimate
+        self.update_cost_estimate()
+        
+        # Show/hide export button based on alt text availability
+        has_alt_text = any(
+            item.alt_text_status == AltTextStatus.COMPLETED and item.alt_text
+            for item in self.batch_processor.queue
+        )
+        self.quick_export_btn.setVisible(has_alt_text)
+        
+    def update_cost_estimate(self):
+        """Update the cost estimate for alt text generation."""
+        if not self.enable_alt_text_cb.isChecked():
+            self.cost_estimate_label.setText("")
+            return
+            
+        queue_count = len(self.batch_processor.queue)
+        if queue_count == 0:
+            self.cost_estimate_label.setText("")
+            return
+            
+        # Get cost estimate from alt text generator
+        if self.batch_processor.alt_text_generator:
+            estimates = self.batch_processor.alt_text_generator.estimate_batch_cost(queue_count)
+            total_cost = estimates['total']
+            self.cost_estimate_label.setText(f"Est. cost: ${total_cost:.2f}")
+        else:
+            # Fallback estimate if generator not initialized
+            cost_per_image = 0.006
+            total_cost = queue_count * cost_per_image
+            self.cost_estimate_label.setText(f"Est. cost: ${total_cost:.2f}")
+        
     def start_processing(self):
         """Start batch processing with current settings."""
         if not self.batch_processor.queue:
@@ -380,7 +502,8 @@ class BatchProcessingWidget(QWidget):
         self.processing_thread = BatchProcessingThread(
             self.batch_processor,
             preset_name,
-            output_folder
+            output_folder,
+            generate_alt_text=self.enable_alt_text_cb.isChecked()
         )
         
         self.processing_thread.progress_updated.connect(self.on_progress_updated)
@@ -404,11 +527,18 @@ class BatchProcessingWidget(QWidget):
             percentage = ((progress.completed_items + progress.failed_items) / progress.total_items) * 100
             self.overall_progress_bar.setValue(int(percentage))
             
-        # Update labels
-        self.overall_progress_label.setText(
-            f"Processing {progress.current_item_index + 1} of {progress.total_items} - "
-            f"{progress.completed_items} completed, {progress.failed_items} failed"
-        )
+        # Update labels based on current phase
+        if progress.current_item_name and "Alt text:" in progress.current_item_name:
+            # Alt text generation phase
+            self.overall_progress_label.setText(
+                f"Generating alt text - {progress.completed_items} of {progress.total_items} completed"
+            )
+        else:
+            # Image processing phase
+            self.overall_progress_label.setText(
+                f"Processing {progress.current_item_index + 1} of {progress.total_items} - "
+                f"{progress.completed_items} completed, {progress.failed_items} failed"
+            )
         
         if progress.current_item_name:
             self.current_item_label.setText(f"Current: {progress.current_item_name}")
@@ -432,6 +562,10 @@ class BatchProcessingWidget(QWidget):
         self.clear_queue_btn.setEnabled(True)
         self.current_item_label.setVisible(False)
         
+        # Update alt text widget with processed items
+        if self.enable_alt_text_cb.isChecked():
+            self.alt_text_widget.set_batch_items(self.batch_processor.queue)
+            
         # Show results
         if results.get('cancelled'):
             message = f"Processing cancelled.\n\n"
@@ -444,6 +578,12 @@ class BatchProcessingWidget(QWidget):
             f"Failed: {results.get('failed', 0)}\n"
             f"Time elapsed: {self._format_time(results.get('elapsed_time', 0))}"
         )
+        
+        # Add alt text results if applicable
+        if 'alt_text_generated' in results:
+            message += f"\n\nAlt text generated: {results.get('alt_text_generated', 0)}"
+            if results.get('alt_text_failed', 0) > 0:
+                message += f"\nAlt text failed: {results.get('alt_text_failed', 0)}"
         
         # Show system notification if enabled
         if self.prefs_manager.get('processing.completion_notification', True):
@@ -536,4 +676,125 @@ class BatchProcessingWidget(QWidget):
                 self,
                 "Preview Error",
                 f"Could not load image for preview: {batch_item.source_path.name}"
+            )
+            
+    def on_alt_text_toggled(self, checked: bool):
+        """Handle alt text generation toggle."""
+        if checked:
+            # Check API key again
+            api_key = self.prefs_manager.get('alt_text.api_key')
+            if not api_key:
+                self.enable_alt_text_cb.setChecked(False)
+                QMessageBox.warning(
+                    self,
+                    "API Key Required",
+                    "Please configure your Anthropic API key in preferences to enable alt text generation."
+                )
+                return
+                
+            # Configure batch processor
+            self.batch_processor.set_alt_text_generation(True, api_key)
+            context = self.prefs_manager.get('alt_text.default_context', 'editorial image')
+            self.batch_processor.set_alt_text_context(context)
+            
+            self.alt_text_status_label.setText("Alt text generation enabled")
+            self.alt_text_status_label.setStyleSheet("color: green;")
+        else:
+            self.batch_processor.set_alt_text_generation(False)
+            self.alt_text_status_label.setText("Alt text generation disabled")
+            self.alt_text_status_label.setStyleSheet("color: #666;")
+            
+        # Update cost estimate
+        self.update_cost_estimate()
+            
+    def on_alt_text_updated(self, updates: dict):
+        """Handle alt text updates from the widget."""
+        # Update batch items with new alt text
+        for filename, alt_text in updates.items():
+            for item in self.batch_processor.queue:
+                if item.source_path.name == filename:
+                    item.alt_text = alt_text
+                    break
+                    
+        logger.info(f"Updated alt text for {len(updates)} items")
+        
+    def on_regenerate_requested(self, filenames: list):
+        """Handle alt text regeneration requests."""
+        if not self.batch_processor.alt_text_generator:
+            QMessageBox.warning(
+                self,
+                "Alt Text Not Configured",
+                "Please enable alt text generation first."
+            )
+            return
+            
+        # Mark items for regeneration
+        items_to_regenerate = []
+        for filename in filenames:
+            for item in self.batch_processor.queue:
+                if item.source_path.name == filename:
+                    item.alt_text_status = AltTextStatus.PENDING
+                    items_to_regenerate.append(item)
+                    break
+                    
+        if items_to_regenerate:
+            # Start regeneration in a separate thread
+            # This would need to be implemented similar to batch processing
+            logger.info(f"Marked {len(items_to_regenerate)} items for alt text regeneration")
+            
+    def quick_export_alt_text(self):
+        """Quick export alt text results to CSV."""
+        # Check if we have any completed alt text items
+        completed_items = [
+            item for item in self.batch_processor.queue
+            if item.alt_text_status == AltTextStatus.COMPLETED and item.alt_text
+        ]
+        
+        if not completed_items:
+            QMessageBox.information(
+                self,
+                "No Data to Export",
+                "No completed alt text results to export."
+            )
+            return
+            
+        # Generate default filename
+        exporter = AltTextExporter()
+        default_filename = exporter.generate_filename(ExportFormat.CSV)
+        
+        # Get save location
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Alt Text Results",
+            str(Path.home() / "Downloads" / default_filename),
+            "CSV Files (*.csv)"
+        )
+        
+        if not output_path:
+            return
+            
+        output_path = Path(output_path)
+        
+        # Export all completed items
+        success, message = exporter.export_csv(
+            self.batch_processor.queue,
+            output_path,
+            ExportOptions.COMPLETED_ONLY
+        )
+        
+        if success:
+            QMessageBox.information(
+                self,
+                "Export Complete",
+                f"Alt text results exported to:\n{output_path.name}"
+            )
+            
+            # Open in finder
+            import subprocess
+            subprocess.run(["open", "-R", str(output_path)])
+        else:
+            QMessageBox.critical(
+                self,
+                "Export Failed",
+                message
             )

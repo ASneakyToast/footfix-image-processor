@@ -944,20 +944,37 @@ class MainWindow(QMainWindow):
         
     def show_preferences(self):
         """Show the preferences window."""
+        logger.info("Opening preferences window")
         prefs_window = PreferencesWindow(self)
-        prefs_window.preferences_changed.connect(self.on_preferences_changed)
         
-        if prefs_window.exec() == QDialog.Accepted:
-            self.on_preferences_changed()
+        # Connect the signal before showing the dialog
+        prefs_window.preferences_changed.connect(self.on_preferences_changed)
+        logger.info("Connected preferences_changed signal to on_preferences_changed")
+        
+        # Show the dialog (exec blocks until dialog is closed)
+        result = prefs_window.exec()
+        logger.info(f"Preferences dialog closed with result: {result} (Accepted={QDialog.Accepted})")
+        
+        # Note: We don't need to call on_preferences_changed here because
+        # it should be called via the signal when Apply or OK is clicked
             
     def on_preferences_changed(self):
         """Handle preferences changes."""
+        logger.info("on_preferences_changed called - handling preference changes")
+        
         # Reload preferences
         self.load_preferences()
         
         # Update UI elements
         self.output_folder_edit.setText(str(self.output_folder))
         self.menu_manager._update_recent_files(self.recent_files)
+        
+        # Refresh alt text availability in batch widget
+        if hasattr(self, 'batch_widget'):
+            logger.info("Calling batch_widget.refresh_alt_text_availability()")
+            self.batch_widget.refresh_alt_text_availability()
+        else:
+            logger.warning("batch_widget not found as attribute")
         
         # Apply interface preferences
         show_tooltips = self.prefs_manager.get('interface.show_tooltips', True)

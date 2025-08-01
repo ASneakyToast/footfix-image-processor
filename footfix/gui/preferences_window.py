@@ -43,6 +43,7 @@ class PreferencesWindow(QDialog):
         self.tab_widget.addTab(self.create_output_tab(), "Output")
         self.tab_widget.addTab(self.create_processing_tab(), "Processing")
         self.tab_widget.addTab(self.create_interface_tab(), "Interface")
+        self.tab_widget.addTab(self.create_alt_text_tab(), "Alt Text")
         self.tab_widget.addTab(self.create_advanced_tab(), "Advanced")
         
         # Dialog buttons
@@ -266,6 +267,165 @@ class PreferencesWindow(QDialog):
         layout.addStretch()
         return widget
         
+    def create_alt_text_tab(self):
+        """Create the alt text preferences tab."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # API Configuration
+        api_group = QGroupBox("API Configuration")
+        api_layout = QVBoxLayout()
+        
+        # API Key
+        api_key_layout = QHBoxLayout()
+        api_key_layout.addWidget(QLabel("Anthropic API Key:"))
+        
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setEchoMode(QLineEdit.Password)
+        self.api_key_edit.setPlaceholderText("Enter your Anthropic API key")
+        api_key_layout.addWidget(self.api_key_edit)
+        
+        # Show/hide button
+        self.show_api_key_btn = QPushButton("Show")
+        self.show_api_key_btn.setCheckable(True)
+        self.show_api_key_btn.toggled.connect(self.toggle_api_key_visibility)
+        api_key_layout.addWidget(self.show_api_key_btn)
+        
+        # Test API key button
+        self.test_api_btn = QPushButton("Test")
+        self.test_api_btn.clicked.connect(self.test_api_key)
+        api_key_layout.addWidget(self.test_api_btn)
+        
+        api_layout.addLayout(api_key_layout)
+        
+        # API status label
+        self.api_status_label = QLabel("")
+        self.api_status_label.setWordWrap(True)
+        api_layout.addWidget(self.api_status_label)
+        
+        # API key help
+        api_help = QLabel(
+            "Get your API key from <a href='https://console.anthropic.com/'>Anthropic Console</a>"
+        )
+        api_help.setOpenExternalLinks(True)
+        api_help.setStyleSheet("color: #666; font-size: 11px;")
+        api_layout.addWidget(api_help)
+        
+        api_group.setLayout(api_layout)
+        layout.addWidget(api_group)
+        
+        # Generation Settings
+        generation_group = QGroupBox("Generation Settings")
+        generation_layout = QVBoxLayout()
+        
+        # Enable alt text
+        self.enable_alt_text_cb = QCheckBox("Enable alt text generation by default")
+        generation_layout.addWidget(self.enable_alt_text_cb)
+        
+        # Default context
+        context_layout = QHBoxLayout()
+        context_layout.addWidget(QLabel("Default context:"))
+        
+        self.context_combo = QComboBox()
+        self.context_combo.setEditable(True)
+        self.context_combo.addItems([
+            "editorial image",
+            "product photo",
+            "news photograph",
+            "social media post",
+            "marketing material"
+        ])
+        context_layout.addWidget(self.context_combo)
+        context_layout.addStretch()
+        
+        generation_layout.addLayout(context_layout)
+        
+        # Concurrent requests
+        concurrent_layout = QHBoxLayout()
+        concurrent_layout.addWidget(QLabel("Max concurrent API requests:"))
+        
+        self.concurrent_requests_spin = QSpinBox()
+        self.concurrent_requests_spin.setRange(1, 10)
+        self.concurrent_requests_spin.setSuffix(" requests")
+        concurrent_layout.addWidget(self.concurrent_requests_spin)
+        concurrent_layout.addStretch()
+        
+        generation_layout.addLayout(concurrent_layout)
+        
+        generation_group.setLayout(generation_layout)
+        layout.addWidget(generation_group)
+        
+        # Cost Tracking
+        cost_group = QGroupBox("Cost Tracking & Usage Statistics")
+        cost_layout = QVBoxLayout()
+        
+        self.enable_cost_tracking_cb = QCheckBox("Track API usage and costs")
+        self.enable_cost_tracking_cb.toggled.connect(self.update_usage_stats)
+        cost_layout.addWidget(self.enable_cost_tracking_cb)
+        
+        # Usage statistics grid
+        stats_grid = QHBoxLayout()
+        
+        # Current month stats
+        current_stats_group = QGroupBox("Current Month")
+        current_stats_layout = QVBoxLayout()
+        
+        self.current_requests_label = QLabel("Requests: 0")
+        current_stats_layout.addWidget(self.current_requests_label)
+        
+        self.current_cost_label = QLabel("Cost: $0.00")
+        current_stats_layout.addWidget(self.current_cost_label)
+        
+        self.avg_cost_label = QLabel("Avg per image: $0.00")
+        current_stats_layout.addWidget(self.avg_cost_label)
+        
+        current_stats_group.setLayout(current_stats_layout)
+        stats_grid.addWidget(current_stats_group)
+        
+        # All time stats
+        alltime_stats_group = QGroupBox("All Time")
+        alltime_stats_layout = QVBoxLayout()
+        
+        self.total_requests_label = QLabel("Total requests: 0")
+        alltime_stats_layout.addWidget(self.total_requests_label)
+        
+        self.total_cost_label = QLabel("Total cost: $0.00")
+        alltime_stats_layout.addWidget(self.total_cost_label)
+        
+        self.reset_stats_btn = QPushButton("Reset Statistics")
+        self.reset_stats_btn.clicked.connect(self.reset_usage_stats)
+        alltime_stats_layout.addWidget(self.reset_stats_btn)
+        
+        alltime_stats_group.setLayout(alltime_stats_layout)
+        stats_grid.addWidget(alltime_stats_group)
+        
+        cost_layout.addLayout(stats_grid)
+        
+        # Cost estimation
+        estimate_layout = QHBoxLayout()
+        estimate_layout.addWidget(QLabel("Estimate cost for"))
+        
+        self.estimate_count_spin = QSpinBox()
+        self.estimate_count_spin.setRange(1, 10000)
+        self.estimate_count_spin.setValue(100)
+        self.estimate_count_spin.valueChanged.connect(self.update_cost_estimate)
+        estimate_layout.addWidget(self.estimate_count_spin)
+        
+        estimate_layout.addWidget(QLabel("images:"))
+        
+        self.estimate_label = QLabel("$0.00")
+        self.estimate_label.setStyleSheet("font-weight: bold;")
+        estimate_layout.addWidget(self.estimate_label)
+        
+        estimate_layout.addStretch()
+        cost_layout.addLayout(estimate_layout)
+        
+        cost_group.setLayout(cost_layout)
+        layout.addWidget(cost_group)
+        
+        layout.addStretch()
+        return widget
+        
     def create_advanced_tab(self):
         """Create the advanced preferences tab."""
         widget = QWidget()
@@ -367,6 +527,19 @@ class PreferencesWindow(QDialog):
         self.show_tooltips_cb.setChecked(self.prefs_manager.get('interface.show_tooltips', True))
         self.confirm_cancel_cb.setChecked(self.prefs_manager.get('interface.confirm_batch_cancel', True))
         
+        # Alt Text
+        api_key = self.prefs_manager.get('alt_text.api_key')
+        if api_key:
+            self.api_key_edit.setText(api_key)
+        self.enable_alt_text_cb.setChecked(self.prefs_manager.get('alt_text.enabled', False))
+        self.context_combo.setCurrentText(self.prefs_manager.get('alt_text.default_context', 'editorial image'))
+        self.concurrent_requests_spin.setValue(self.prefs_manager.get('alt_text.max_concurrent_requests', 5))
+        self.enable_cost_tracking_cb.setChecked(self.prefs_manager.get('alt_text.enable_cost_tracking', True))
+        
+        # Initialize usage stats display
+        self.update_usage_stats()
+        self.update_cost_estimate()
+        
         # Advanced
         self.memory_spin.setValue(self.prefs_manager.get('advanced.memory_limit_mb', 2048))
         self.temp_dir_edit.setText(self.prefs_manager.get('advanced.temp_directory', '') or '')
@@ -374,6 +547,9 @@ class PreferencesWindow(QDialog):
         
     def save_preferences(self):
         """Save UI values to preferences."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # General
         self.prefs_manager.set('recent.max_recent_items', self.max_recent_spin.value())
         self.prefs_manager.set('advanced.check_updates', self.check_updates_cb.isChecked())
@@ -396,6 +572,19 @@ class PreferencesWindow(QDialog):
         self.prefs_manager.set('interface.show_tooltips', self.show_tooltips_cb.isChecked())
         self.prefs_manager.set('interface.confirm_batch_cancel', self.confirm_cancel_cb.isChecked())
         
+        # Alt Text
+        api_key = self.api_key_edit.text().strip()
+        logger.info(f"Saving API key: {'[REDACTED]' if api_key else '[EMPTY]'} (length: {len(api_key)})")
+        if api_key:
+            self.prefs_manager.set('alt_text.api_key', api_key)
+        else:
+            # Clear the API key if empty
+            self.prefs_manager.set('alt_text.api_key', None)
+        self.prefs_manager.set('alt_text.enabled', self.enable_alt_text_cb.isChecked())
+        self.prefs_manager.set('alt_text.default_context', self.context_combo.currentText())
+        self.prefs_manager.set('alt_text.max_concurrent_requests', self.concurrent_requests_spin.value())
+        self.prefs_manager.set('alt_text.enable_cost_tracking', self.enable_cost_tracking_cb.isChecked())
+        
         # Advanced
         self.prefs_manager.set('advanced.memory_limit_mb', self.memory_spin.value())
         temp_dir = self.temp_dir_edit.text()
@@ -403,16 +592,29 @@ class PreferencesWindow(QDialog):
         self.prefs_manager.set('advanced.log_level', self.log_level_combo.currentText())
         
         # Save to disk
-        self.prefs_manager.save()
+        success = self.prefs_manager.save()
+        logger.info(f"Preferences saved to disk: {success}")
+        
+        # Verify the key was saved
+        saved_key = self.prefs_manager.get('alt_text.api_key')
+        logger.info(f"Verified saved API key: {'[REDACTED]' if saved_key else '[EMPTY]'}")
         
     def apply_preferences(self):
         """Apply preferences without closing dialog."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("Apply button clicked - saving preferences")
         self.save_preferences()
+        logger.info("Emitting preferences_changed signal")
         self.preferences_changed.emit()
         
     def accept(self):
         """Save preferences and close dialog."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("OK button clicked - saving preferences")
         self.save_preferences()
+        logger.info("Emitting preferences_changed signal")
         self.preferences_changed.emit()
         super().accept()
         
@@ -437,6 +639,120 @@ class PreferencesWindow(QDialog):
         
         if folder:
             self.temp_dir_edit.setText(folder)
+            
+    def toggle_api_key_visibility(self, checked: bool):
+        """Toggle API key visibility."""
+        if checked:
+            self.api_key_edit.setEchoMode(QLineEdit.Normal)
+            self.show_api_key_btn.setText("Hide")
+        else:
+            self.api_key_edit.setEchoMode(QLineEdit.Password)
+            self.show_api_key_btn.setText("Show")
+            
+    def test_api_key(self):
+        """Test the API key validity."""
+        api_key = self.api_key_edit.text().strip()
+        
+        if not api_key:
+            self.api_status_label.setText("Please enter an API key to test.")
+            self.api_status_label.setStyleSheet("color: orange;")
+            return
+            
+        # Disable button during test
+        self.test_api_btn.setEnabled(False)
+        self.api_status_label.setText("Testing API key...")
+        self.api_status_label.setStyleSheet("color: blue;")
+        
+        # Import here to avoid circular dependency
+        from ..core.alt_text_generator import AltTextGenerator
+        import asyncio
+        
+        async def validate_key():
+            """Validate API key with the generator's built-in validation."""
+            generator = AltTextGenerator(api_key)
+            
+            try:
+                # Use the generator's validate_api_key method which tests vision capabilities
+                is_valid, message = await generator.validate_api_key()
+                return is_valid, message
+                            
+            except Exception as e:
+                return False, f"Connection error: {str(e)}"
+                
+        # Run the async validation
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            success, message = loop.run_until_complete(validate_key())
+            
+            if success:
+                self.api_status_label.setText(message)
+                self.api_status_label.setStyleSheet("color: green;")
+            else:
+                self.api_status_label.setText(message)
+                self.api_status_label.setStyleSheet("color: red;")
+                
+        except Exception as e:
+            self.api_status_label.setText(f"Test failed: {str(e)}")
+            self.api_status_label.setStyleSheet("color: red;")
+            
+        finally:
+            self.test_api_btn.setEnabled(True)
+            
+    def update_usage_stats(self):
+        """Update usage statistics display."""
+        if not self.enable_cost_tracking_cb.isChecked():
+            return
+            
+        # Get stats from preferences
+        stats = self.prefs_manager.get('alt_text.usage_stats', {})
+        
+        # Current month stats
+        from datetime import datetime
+        current_month = datetime.now().strftime("%Y-%m")
+        month_stats = stats.get('monthly', {}).get(current_month, {})
+        
+        self.current_requests_label.setText(f"Requests: {month_stats.get('requests', 0)}")
+        self.current_cost_label.setText(f"Cost: ${month_stats.get('cost', 0):.2f}")
+        
+        avg_cost = 0
+        if month_stats.get('requests', 0) > 0:
+            avg_cost = month_stats.get('cost', 0) / month_stats.get('requests', 0)
+        self.avg_cost_label.setText(f"Avg per image: ${avg_cost:.3f}")
+        
+        # All time stats
+        total_stats = stats.get('total', {})
+        self.total_requests_label.setText(f"Total requests: {total_stats.get('requests', 0)}")
+        self.total_cost_label.setText(f"Total cost: ${total_stats.get('cost', 0):.2f}")
+        
+        # Update cost estimate
+        self.update_cost_estimate()
+        
+    def update_cost_estimate(self):
+        """Update the cost estimate based on spinner value."""
+        count = self.estimate_count_spin.value()
+        # Using the standard cost per image from alt_text_generator.py
+        cost_per_image = 0.006
+        total_cost = count * cost_per_image
+        self.estimate_label.setText(f"${total_cost:.2f}")
+        
+    def reset_usage_stats(self):
+        """Reset usage statistics."""
+        reply = QMessageBox.question(
+            self,
+            "Reset Statistics",
+            "Are you sure you want to reset all usage statistics?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            self.prefs_manager.set('alt_text.usage_stats', {})
+            self.update_usage_stats()
+            QMessageBox.information(
+                self,
+                "Statistics Reset",
+                "Usage statistics have been reset."
+            )
             
     def clear_recent(self, category):
         """Clear a recent items list."""

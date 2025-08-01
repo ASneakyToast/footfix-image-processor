@@ -47,6 +47,13 @@ class PreferencesManager:
             'temp_directory': None,
             'log_level': 'INFO',
             'check_updates': True,
+        },
+        'alt_text': {
+            'enabled': False,
+            'api_key': None,
+            'default_context': 'editorial image',
+            'max_concurrent_requests': 5,
+            'enable_cost_tracking': True,
         }
     }
     
@@ -74,11 +81,18 @@ class PreferencesManager:
             return False
             
         try:
+            logger.info(f"Loading preferences from: {self.preferences_file}")
             with open(self.preferences_file, 'r') as f:
                 loaded_prefs = json.load(f)
                 
             # Merge with defaults to handle missing keys
             self.preferences = self._merge_preferences(self.DEFAULTS, loaded_prefs)
+            
+            # Log the alt_text section specifically
+            alt_text_prefs = self.preferences.get('alt_text', {})
+            api_key = alt_text_prefs.get('api_key')
+            logger.info(f"Alt text preferences loaded: api_key={'[REDACTED]' if api_key else '[EMPTY]'}, enabled={alt_text_prefs.get('enabled')}")
+            
             logger.info("Preferences loaded successfully")
             return True
             
@@ -94,6 +108,13 @@ class PreferencesManager:
             bool: True if saved successfully, False otherwise
         """
         try:
+            logger.info(f"Saving preferences to: {self.preferences_file}")
+            
+            # Log the alt_text section specifically
+            alt_text_prefs = self.preferences.get('alt_text', {})
+            api_key = alt_text_prefs.get('api_key')
+            logger.info(f"Alt text preferences being saved: api_key={'[REDACTED]' if api_key else '[EMPTY]'}, enabled={alt_text_prefs.get('enabled')}")
+            
             with open(self.preferences_file, 'w') as f:
                 json.dump(self.preferences, f, indent=2)
                 

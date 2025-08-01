@@ -13,9 +13,11 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import gc
 import os
+import asyncio
 
 from .processor import ImageProcessor
 from ..presets.profiles import PresetProfile, get_preset
+from .alt_text_generator import AltTextStatus, AltTextGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,11 @@ class BatchItem:
     error_message: Optional[str] = None
     processing_time: float = 0.0
     file_size: int = 0
+    # Alt text fields
+    alt_text: Optional[str] = None
+    alt_text_status: AltTextStatus = AltTextStatus.PENDING
+    alt_text_error: Optional[str] = None
+    alt_text_generation_time: float = 0.0
     
     def __post_init__(self):
         """Initialize file size."""
@@ -84,6 +91,11 @@ class BatchProcessor:
         self.memory_limit_mb = 2048  # Default 2GB limit
         self.enable_memory_optimization = True
         self.images_per_gc = 5  # Run garbage collection every N images
+        
+        # Alt text generation settings
+        self.alt_text_generator: Optional[AltTextGenerator] = None
+        self.enable_alt_text = False
+        self.alt_text_context = "editorial image"  # Default context for alt text generation
         
     def add_image(self, image_path: Path) -> bool:
         """
@@ -233,6 +245,26 @@ class BatchProcessor:
         """Enable or disable memory optimization."""
         self.enable_memory_optimization = enabled
         logger.info(f"Memory optimization {'enabled' if enabled else 'disabled'}")
+        
+    def set_alt_text_generation(self, enabled: bool, api_key: Optional[str] = None):
+        """
+        Enable or disable alt text generation.
+        
+        Args:
+            enabled: Whether to enable alt text generation
+            api_key: Anthropic API key (if not provided, will use from preferences)
+        """
+        self.enable_alt_text = enabled
+        if enabled and not self.alt_text_generator:
+            self.alt_text_generator = AltTextGenerator(api_key)
+        elif enabled and api_key:
+            self.alt_text_generator.set_api_key(api_key)
+        logger.info(f"Alt text generation {'enabled' if enabled else 'disabled'}")
+        
+    def set_alt_text_context(self, context: str):
+        """Set the context for alt text generation."""
+        self.alt_text_context = context
+        logger.info(f"Alt text context set to: {context}")
                 
     def process_batch(self, preset_name: str, output_folder: Path) -> Dict[str, Any]:
         """
@@ -349,6 +381,95 @@ class BatchProcessor:
         logger.info(f"Batch processing complete: {results}")
         return results
         
+    def process_batch_with_alt_text(self, preset_name: str, output_folder: Path) -> Dict[str, Any]:
+        """
+        Process all images in the queue with the specified preset and optional alt text generation.
+        
+        Args:
+            preset_name: Name of the preset to apply
+            output_folder: Destination folder for processed images
+            
+        Returns:
+            Dict containing processing results and statistics
+        """
+        # First, process images normally
+        results = self.process_batch(preset_name, output_folder)
+        
+        # Then, if alt text is enabled, generate descriptions
+        if self.enable_alt_text and self.alt_text_generator:
+            logger.info("Starting alt text generation phase")
+            
+            # Run alt text generation in async context
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                alt_text_results = loop.run_until_complete(
+                    self._generate_alt_text_batch()
+                )
+                
+                # Update results with alt text statistics
+                results['alt_text_generated'] = sum(
+                    1 for item in self.queue 
+                    if item.alt_text_status == AltTextStatus.COMPLETED
+                )
+                results['alt_text_failed'] = sum(
+                    1 for item in self.queue 
+                    if item.alt_text_status == AltTextStatus.ERROR
+                )
+                
+            except Exception as e:
+                logger.error(f"Alt text generation failed: {e}")
+                results['alt_text_error'] = str(e)
+                
+            finally:
+                loop.close()
+                
+        return results
+        
+    async def _generate_alt_text_batch(self):
+        """Generate alt text for all processed images in the queue."""
+        async with self.alt_text_generator:
+            tasks = []
+            
+            for index, item in enumerate(self.queue):
+                # Only generate alt text for successfully processed images
+                if item.status == ProcessingStatus.COMPLETED and item.output_path:
+                    # Update progress
+                    self.progress.current_item_name = f"Alt text: {item.source_path.name}"
+                    self._notify_progress()
+                    
+                    # Create async task
+                    task = self._generate_alt_text_for_item(item)
+                    tasks.append(task)
+                    
+            # Wait for all tasks to complete
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+                
+    async def _generate_alt_text_for_item(self, item: BatchItem):
+        """Generate alt text for a single item."""
+        try:
+            start_time = time.time()
+            result = await self.alt_text_generator.generate_alt_text(
+                item.output_path,  # Use processed image for better quality
+                context=self.alt_text_context
+            )
+            
+            # Update item with results
+            item.alt_text = result.alt_text
+            item.alt_text_status = result.status
+            item.alt_text_error = result.error_message
+            item.alt_text_generation_time = time.time() - start_time
+            
+            # Notify callbacks
+            self._notify_item_complete(item)
+            
+        except Exception as e:
+            logger.error(f"Alt text generation failed for {item.source_path.name}: {e}")
+            item.alt_text_status = AltTextStatus.ERROR
+            item.alt_text_error = str(e)
+        
     def cancel_processing(self):
         """Cancel the current batch processing operation."""
         self._cancel_flag.set()
@@ -367,5 +488,8 @@ class BatchProcessor:
             "path": str(item.source_path),
             "size": item.file_size,
             "status": item.status.value,
-            "error": item.error_message
+            "error": item.error_message,
+            "alt_text": item.alt_text,
+            "alt_text_status": item.alt_text_status.value,
+            "alt_text_error": item.alt_text_error
         } for i, item in enumerate(self.queue)]

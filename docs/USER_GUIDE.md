@@ -7,11 +7,12 @@
 4. [Getting Started](#getting-started)
 5. [Single Image Processing](#single-image-processing)
 6. [Batch Processing](#batch-processing)
-7. [Advanced Features](#advanced-features)
-8. [Presets](#presets)
-9. [Keyboard Shortcuts](#keyboard-shortcuts)
-10. [Troubleshooting](#troubleshooting)
-11. [FAQ](#faq)
+7. [AI Alt Text Generation](#ai-alt-text-generation)
+8. [Advanced Features](#advanced-features)
+9. [Presets](#presets)
+10. [Keyboard Shortcuts](#keyboard-shortcuts)
+11. [Troubleshooting](#troubleshooting)
+12. [FAQ](#faq)
 
 ## Introduction
 
@@ -22,6 +23,7 @@ FootFix is a professional image processing application designed specifically for
 - **Smart Resizing**: Maintain aspect ratios with percentage-based scaling
 - **Quality Optimization**: Fine-tune JPEG quality for optimal file sizes
 - **Image Enhancement**: Built-in sharpening and color optimization
+- **AI Alt Text Generation**: Create professional image descriptions using Claude Vision API
 - **Preset Management**: Save and reuse your favorite settings
 - **Before/After Preview**: Compare original and processed images side-by-side
 - **Native macOS Integration**: Menu bar, keyboard shortcuts, and drag-and-drop support
@@ -56,10 +58,11 @@ On first launch, macOS may show a security warning:
 
 ### Main Interface Overview
 
-When you launch FootFix, you'll see the main window with two tabs:
+When you launch FootFix, you'll see the main window with three tabs:
 
 1. **Single Image** - Process one image at a time with live preview
 2. **Batch Processing** - Process multiple images with the same settings
+3. **Alt Text** - Generate and review AI-powered image descriptions
 
 ### Quick Start
 
@@ -146,6 +149,98 @@ During batch processing:
 - **Cancel**: Stop processing at any time
 - **Status Icons**: ✓ = Complete, ⚠️ = Warning, ✗ = Failed
 
+## AI Alt Text Generation
+
+FootFix includes powerful AI-driven alt text generation using Anthropic's Claude Vision API. This feature helps create professional, accessibility-compliant image descriptions for editorial content.
+
+### Setting Up Alt Text
+
+1. **Configure API Key**:
+   - Open Preferences (⌘,)
+   - Go to Alt Text tab
+   - Enter your Anthropic API key
+   - Click "Validate Key"
+
+2. **First Time Setup**:
+   - Get an API key from [console.anthropic.com](https://console.anthropic.com)
+   - Enable cost tracking (optional)
+   - Set monthly budget alerts
+
+### Generating Alt Text
+
+#### For Processed Images
+
+1. Process your images normally
+2. Switch to the **Alt Text** tab
+3. Click **Generate Alt Text**
+4. Review generated descriptions
+5. Edit as needed for brand voice
+
+#### Batch Generation
+
+1. Select multiple images
+2. Click **Generate for All**
+3. Monitor progress bar
+4. Costs approximately $0.006 per image
+
+### Reviewing and Editing
+
+The Alt Text tab shows:
+- Image thumbnails
+- Generated descriptions
+- Character count (optimal: 50-125)
+- Status indicators
+- Edit capabilities
+
+**Best Practices**:
+- Keep under 125 characters
+- Be descriptive yet concise
+- Avoid "image of" or "picture of"
+- Include relevant context
+
+### Exporting Alt Text
+
+#### Export Formats
+
+1. **CSV**: For spreadsheet review
+   - Includes all metadata
+   - Easy bulk editing
+   - Excel compatible
+
+2. **JSON**: For developers
+   - Structured data
+   - API integration ready
+   - Includes statistics
+
+3. **WordPress**: CMS-ready format
+   - Proper column mapping
+   - Import-ready CSV
+   - Title generation
+
+#### Export Workflow
+
+1. Click **Export** dropdown
+2. Choose format
+3. Select scope:
+   - All items
+   - Selected only
+   - Completed only
+4. Save to location
+
+### Cost Management
+
+**Current Pricing**: ~$0.006 per image
+
+**Monthly Estimates**:
+- 100 images: $0.60
+- 1,000 images: $6.00
+- 5,000 images: $30.00
+
+**Tracking Usage**:
+- View in Preferences
+- Monthly summaries
+- Cost per session
+
 ## Advanced Features
 
 ### Custom Filename Templates
@@ -181,6 +276,12 @@ Access via **FootFix > Preferences** (⌘,):
 - Default quality setting
 - Auto-enhancement options
 - Memory usage limits
+
+#### Alt Text
+- API key configuration
+- Cost tracking settings
+- Usage statistics
+- Export preferences
 
 #### Interface
 - Theme (Light/Dark/Auto)
@@ -252,8 +353,14 @@ FootFix includes several presets for common tasks:
 ### Navigation
 - **⌘1** - Single image tab
 - **⌘2** - Batch processing tab
+- **⌘3** - Alt text tab
 - **⌘[** - Previous image (in batch)
 - **⌘]** - Next image (in batch)
+
+### Alt Text Shortcuts
+- **⌘G** - Generate alt text
+- **⌘R** - Regenerate selected
+- **⌘E** - Export alt text
 
 ### View Controls
 - **⌘+** - Zoom in
@@ -286,6 +393,12 @@ FootFix includes several presets for common tasks:
 - Ensure output directory is writable
 - Try a different output format
 - Image may be corrupted
+
+#### Alt text generation issues
+- **"Invalid API key"**: Verify key in Preferences
+- **"Rate limited"**: Wait 60 seconds or upgrade plan
+- **"Network error"**: Check internet connection
+- **"No alt text generated"**: Try regenerating
 
 ### Performance Tips
 
@@ -327,6 +440,18 @@ A: Hold Option while launching FootFix, or delete `~/Library/Preferences/com.foo
 **Q: Is there a Windows version?**
 A: FootFix is currently macOS only, optimized for the Mac experience.
 
+**Q: How much does alt text generation cost?**
+A: Approximately $0.006 per image. 1,000 images cost about $6.00.
+
+**Q: Can I use my own AI service for alt text?**
+A: Currently FootFix only supports Anthropic's Claude Vision API.
+
+**Q: Are alt texts saved with the images?**
+A: Alt texts are stored in FootFix and can be exported in various formats.
+
+**Q: Can I edit alt text after generation?**
+A: Yes, all generated alt text can be reviewed and edited before export.
+
 ## Support
 
 For additional help:
@@ -336,4 +461,4 @@ For additional help:
 
 ---
 
-*FootFix Version 1.0.0 - Professional Image Processing for Editorial Teams*
+*FootFix Version 1.1.0 - Professional Image Processing with AI Alt Text for Editorial Teams*
