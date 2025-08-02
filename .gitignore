@@ -55,6 +55,9 @@ htmlcov/
 .dmypy.json
 dmypy.json
 
+# Claude settings
+.claude/settings.local.json
+
 # Distribution / packaging
 .Python
 build/
