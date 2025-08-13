@@ -21,7 +21,7 @@ from ..core.batch_processor import BatchProcessor, BatchItem, BatchProgress, Pro
 from ..core.alt_text_generator import AltTextStatus
 from ..utils.notifications import NotificationManager
 from ..utils.preferences import PreferencesManager
-from ..utils.alt_text_exporter import AltTextExporter, ExportFormat
+from ..utils.alt_text_exporter import AltTextExporter, ExportFormat, ExportOptions
 from .alt_text_widget import AltTextWidget
 
 logger = logging.getLogger(__name__)
