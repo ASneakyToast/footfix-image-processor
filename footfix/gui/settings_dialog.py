@@ -28,13 +28,19 @@ class AdvancedSettingsDialog(QDialog):
     # Signal emitted when settings are applied
     settings_applied = Signal(dict)
     
-    def __init__(self, parent=None, current_preset: Optional[PresetConfig] = None):
+    def __init__(self, parent=None, current_preset: Optional[PresetConfig] = None, preferences_manager=None):
         super().__init__(parent)
         self.current_preset = current_preset
+        self.preferences_manager = preferences_manager
         self.custom_presets_path = Path.home() / ".footfix" / "custom_presets.json"
         self.custom_presets = self.load_custom_presets()
         
         self.setup_ui()
+        
+        # Load preferences values
+        if self.preferences_manager:
+            max_file_size_mb = self.preferences_manager.get('advanced.max_file_size_mb', 50)
+            self.max_file_size_spin.setValue(max_file_size_mb)
         
         # Load current preset values if provided
         if current_preset:
@@ -207,6 +213,21 @@ class AdvancedSettingsDialog(QDialog):
         filename_group.setLayout(filename_layout)
         layout.addWidget(filename_group)
         
+        # File size limits group
+        limits_group = QGroupBox("File Size Limits")
+        limits_layout = QFormLayout()
+        
+        # Maximum file size
+        self.max_file_size_spin = QSpinBox()
+        self.max_file_size_spin.setRange(1, 500)  # 1MB to 500MB
+        self.max_file_size_spin.setValue(50)
+        self.max_file_size_spin.setSuffix(" MB")
+        self.max_file_size_spin.setToolTip("Maximum file size allowed for processing")
+        limits_layout.addRow("Max File Size:", self.max_file_size_spin)
+        
+        limits_group.setLayout(limits_layout)
+        layout.addWidget(limits_group)
+        
         layout.addStretch()
         
     def setup_presets_tab(self, parent: QWidget):
@@ -358,6 +379,7 @@ class AdvancedSettingsDialog(QDialog):
             'quality': self.quality_slider.value(),
             'prefix': self.prefix_edit.text(),
             'suffix': self.suffix_edit.text(),
+            'max_file_size_mb': self.max_file_size_spin.value(),
         }
         
         if self.optimize_size_check.isChecked():
@@ -370,6 +392,12 @@ class AdvancedSettingsDialog(QDialog):
     def apply_settings(self):
         """Apply current settings without closing dialog."""
         settings = self.get_settings()
+        
+        # Save file size preference
+        if self.preferences_manager and 'max_file_size_mb' in settings:
+            self.preferences_manager.set('advanced.max_file_size_mb', settings['max_file_size_mb'])
+            self.preferences_manager.save()
+        
         self.settings_applied.emit(settings)
         
     def load_custom_presets(self) -> Dict[str, Dict]:

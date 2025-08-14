@@ -79,15 +79,16 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.processor = ImageProcessor()
+        
+        # Initialize preferences first
+        self.prefs_manager = PreferencesManager()
+        
+        self.processor = ImageProcessor(self.prefs_manager)
         self.current_image_path: Optional[Path] = None
         self.processing_thread: Optional[ProcessingThread] = None
         self.preview_window = None
         self.custom_settings = None  # Store custom settings from advanced dialog
         self.filename_template = FilenameTemplate()
-        
-        # Initialize preferences and notifications
-        self.prefs_manager = PreferencesManager()
         self.notification_manager = NotificationManager()
         self.load_preferences()
         
@@ -644,7 +645,7 @@ class MainWindow(QMainWindow):
         preset_config = preset.get_config() if preset else None
         
         # Create and show dialog
-        dialog = AdvancedSettingsDialog(self, preset_config)
+        dialog = AdvancedSettingsDialog(self, preset_config, self.prefs_manager)
         dialog.settings_applied.connect(self.on_custom_settings_applied)
         
         if dialog.exec() == QDialog.Accepted:

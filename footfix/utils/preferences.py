@@ -47,6 +47,7 @@ class PreferencesManager:
             'temp_directory': None,
             'log_level': 'INFO',
             'check_updates': True,
+            'max_file_size_mb': 50,
         },
         'alt_text': {
             'enabled': False,

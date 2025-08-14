@@ -19,14 +19,15 @@ class ImageProcessor:
     """
     
     SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.tiff', '.tif'}
-    MAX_FILE_SIZE = 15 * 1024 * 1024  # 15MB in bytes
+    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB in bytes
     MIN_FILE_SIZE = 1024  # 1KB in bytes
     
-    def __init__(self):
+    def __init__(self, preferences_manager=None):
         """Initialize the image processor."""
         self.current_image: Optional[Image.Image] = None
         self.original_image: Optional[Image.Image] = None
         self.source_path: Optional[Path] = None
+        self.preferences_manager = preferences_manager
         
     def load_image(self, image_path: str | Path) -> bool:
         """
@@ -53,8 +54,13 @@ class ImageProcessor:
                 
             # Validate file size
             file_size = path.stat().st_size
-            if file_size < self.MIN_FILE_SIZE or file_size > self.MAX_FILE_SIZE:
-                logger.error(f"File size {file_size} bytes is outside valid range")
+            max_file_size = self.MAX_FILE_SIZE
+            if self.preferences_manager:
+                max_file_size_mb = self.preferences_manager.get('advanced.max_file_size_mb', 50)
+                max_file_size = max_file_size_mb * 1024 * 1024
+            
+            if file_size < self.MIN_FILE_SIZE or file_size > max_file_size:
+                logger.error(f"File size {file_size} bytes is outside valid range (max: {max_file_size} bytes)")
                 return False
                 
             # Load the image
