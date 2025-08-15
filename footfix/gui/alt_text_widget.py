@@ -64,6 +64,61 @@ class AltTextEditWidget(QTextEdit):
         self.setPlainText(text)
         
 
+class AltTextActionsWidget(QWidget):
+    """Simple actions widget for table cell use."""
+    
+    regenerate_requested = Signal(str)  # filename
+    edit_requested = Signal(str)  # filename
+    
+    def __init__(self, batch_item: BatchItem, parent=None):
+        super().__init__(parent)
+        self.batch_item = batch_item
+        self.setup_ui()
+        self.update_buttons()
+        
+    def setup_ui(self):
+        """Set up the simple actions UI."""
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(5, 2, 5, 2)
+        layout.setSpacing(5)
+        
+        # Regenerate button
+        self.regenerate_btn = QPushButton("Regenerate")
+        self.regenerate_btn.setFixedSize(80, 24)
+        self.regenerate_btn.setToolTip("Generate new alt text for this image")
+        self.regenerate_btn.clicked.connect(self._on_regenerate_clicked)
+        layout.addWidget(self.regenerate_btn)
+        
+        # Edit button  
+        self.edit_btn = QPushButton("Edit")
+        self.edit_btn.setFixedSize(50, 24)
+        self.edit_btn.setToolTip("Edit alt text in detail panel")
+        self.edit_btn.clicked.connect(self._on_edit_clicked)
+        layout.addWidget(self.edit_btn)
+        
+        layout.addStretch()
+        
+    def update_buttons(self):
+        """Update button states based on item status."""
+        can_regenerate = self.batch_item.alt_text_status in [
+            AltTextStatus.COMPLETED, AltTextStatus.ERROR
+        ]
+        self.regenerate_btn.setEnabled(can_regenerate)
+        
+        # Edit button is always enabled for completed processing
+        self.edit_btn.setEnabled(
+            self.batch_item.status == ProcessingStatus.COMPLETED
+        )
+        
+    def _on_regenerate_clicked(self):
+        """Handle regenerate button click."""
+        self.regenerate_requested.emit(self.batch_item.source_path.name)
+        
+    def _on_edit_clicked(self):
+        """Handle edit button click."""
+        self.edit_requested.emit(self.batch_item.source_path.name)
+
+
 class AltTextItemWidget(QWidget):
     """Widget for displaying and editing a single alt text item."""
     
@@ -303,8 +358,18 @@ class AltTextWidget(QWidget):
         self.items_table.setHorizontalHeaderLabels([
             "Select", "Filename", "Status", "Alt Text", "Actions"
         ])
-        self.items_table.horizontalHeader().setStretchLastSection(True)
-        self.items_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        
+        # Configure column sizing for better readability
+        header = self.items_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Fixed)  # Select checkbox
+        header.setSectionResizeMode(1, QHeaderView.Interactive)  # Filename
+        header.setSectionResizeMode(2, QHeaderView.Interactive)  # Status
+        header.setSectionResizeMode(3, QHeaderView.Stretch)  # Alt Text (main content)
+        header.setSectionResizeMode(4, QHeaderView.Fixed)  # Actions
+        
+        # Set fixed widths for specific columns
+        self.items_table.setColumnWidth(0, 60)   # Select checkbox
+        self.items_table.setColumnWidth(4, 140)  # Actions buttons
         self.items_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.items_table.itemSelectionChanged.connect(self._on_selection_changed)
         
@@ -312,12 +377,15 @@ class AltTextWidget(QWidget):
         
         # Detailed view area
         self.details_widget = QWidget()
-        details_layout = QVBoxLayout(self.details_widget)
+        self.details_layout = QVBoxLayout(self.details_widget)
         
-        self.details_label = QLabel("Select an item to view details")
+        self.details_label = QLabel("Select an item to view details and edit alt text")
         self.details_label.setAlignment(Qt.AlignCenter)
         self.details_label.setStyleSheet("color: #999; padding: 20px;")
-        details_layout.addWidget(self.details_label)
+        self.details_layout.addWidget(self.details_label)
+        
+        # Container for the current detail item widget
+        self.current_detail_widget = None
         
         splitter.addWidget(self.details_widget)
         splitter.setSizes([400, 200])
@@ -346,6 +414,9 @@ class AltTextWidget(QWidget):
         
     def refresh_display(self):
         """Refresh the display with current batch items."""
+        # Hide any current details
+        self._hide_item_details()
+        
         # Clear table
         self.items_table.setRowCount(0)
         
@@ -414,13 +485,17 @@ class AltTextWidget(QWidget):
                 alt_text_preview = alt_text_preview[:50] + "..."
             self.items_table.setItem(row, 3, QTableWidgetItem(alt_text_preview))
             
-            # Create item widget
+            # Create simple actions widget for table cell
+            actions_widget = AltTextActionsWidget(item)
+            actions_widget.regenerate_requested.connect(self._on_item_regenerate_requested)
+            actions_widget.edit_requested.connect(self._on_item_edit_requested)
+            self.items_table.setCellWidget(row, 4, actions_widget)
+            
+            # Create detailed item widget for details panel
             item_widget = AltTextItemWidget(item)
             item_widget.alt_text_updated.connect(self._on_item_alt_text_updated)
             item_widget.regenerate_requested.connect(self._on_item_regenerate_requested)
-            
             self.item_widgets[item.source_path.name] = item_widget
-            self.items_table.setCellWidget(row, 4, item_widget)
             
         # Enable/disable buttons
         self.approve_all_btn.setEnabled(total_items > 0)
@@ -449,6 +524,14 @@ class AltTextWidget(QWidget):
             f"Regenerate Selected ({selected_count})" if selected_count > 0 
             else "Regenerate Selected"
         )
+        
+        # Update details panel with selected row
+        current_row = self.items_table.currentRow()
+        if current_row >= 0 and current_row < len(self.batch_items):
+            item = self.batch_items[current_row]
+            self._show_item_details(item.source_path.name)
+        else:
+            self._hide_item_details()
         
     def _on_approve_all_clicked(self):
         """Handle approve all button click."""
@@ -505,6 +588,42 @@ class AltTextWidget(QWidget):
         
         if reply == QMessageBox.Yes:
             self.regenerate_requested.emit([filename])
+            
+    def _on_item_edit_requested(self, filename: str):
+        """Handle edit request from actions widget."""
+        # Find the item in the table and select it to show details
+        for row in range(self.items_table.rowCount()):
+            item_name = self.items_table.item(row, 1)
+            if item_name and item_name.text() == filename:
+                self.items_table.selectRow(row)
+                self._show_item_details(filename)
+                break
+                
+    def _show_item_details(self, filename: str):
+        """Show detailed editing interface for an item."""
+        if filename in self.item_widgets:
+            # Remove current detail widget if any
+            self._hide_item_details()
+            
+            # Get the detailed widget
+            detail_widget = self.item_widgets[filename]
+            
+            # Add to details layout
+            self.details_layout.addWidget(detail_widget)
+            self.current_detail_widget = detail_widget
+            
+            # Hide the placeholder label
+            self.details_label.setVisible(False)
+            
+    def _hide_item_details(self):
+        """Hide the detailed editing interface."""
+        if self.current_detail_widget:
+            self.details_layout.removeWidget(self.current_detail_widget)
+            self.current_detail_widget.setParent(None)
+            self.current_detail_widget = None
+            
+        # Show the placeholder label
+        self.details_label.setVisible(True)
             
     def update_progress(self, current: int, total: int, message: str = ""):
         """Update progress display."""
@@ -610,8 +729,7 @@ class AltTextWidget(QWidget):
             # Show notification
             self.notification_manager.show_notification(
                 "Export Complete",
-                f"Alt text exported to {output_path.name}",
-                duration=3000
+                f"Alt text exported to {output_path.name}"
             )
             
             # Open folder in finder
