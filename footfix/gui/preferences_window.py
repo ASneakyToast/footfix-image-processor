@@ -23,7 +23,7 @@ class PreferencesWindow(QDialog):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.prefs_manager = PreferencesManager()
+        self.prefs_manager = PreferencesManager.get_instance()
         
         self.setWindowTitle("FootFix Preferences")
         self.setMinimumSize(700, 500)

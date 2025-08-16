@@ -80,8 +80,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         
-        # Initialize preferences first
-        self.prefs_manager = PreferencesManager()
+        # Initialize preferences first (use singleton)
+        self.prefs_manager = PreferencesManager.get_instance()
         
         self.processor = ImageProcessor(self.prefs_manager)
         self.current_image_path: Optional[Path] = None
@@ -95,6 +95,7 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.setup_menu_bar()
         self.setup_logging()
+        self.setup_preference_connections()
         self.restore_window_state()
         
     def setup_ui(self):
@@ -347,6 +348,51 @@ class MainWindow(QMainWindow):
         # Add handler to our logger
         logger.addHandler(gui_handler)
         logger.setLevel(logging.INFO)
+        
+    def setup_preference_connections(self):
+        """Set up connections to preference change signals."""
+        # Connect to preference change signals
+        self.prefs_manager.preferences_changed.connect(self.on_preference_changed)
+        self.prefs_manager.preferences_reloaded.connect(self.on_preferences_reloaded)
+        logger.info("Connected to preference change signals")
+        
+    def on_preference_changed(self, key: str):
+        """Handle individual preference changes."""
+        logger.debug(f"Preference changed: {key}")
+        
+        # Handle specific preference changes
+        if key.startswith('output.'):
+            self.load_preferences()
+            self.output_folder_edit.setText(str(self.output_folder))
+        elif key.startswith('interface.'):
+            # Apply interface preferences
+            show_tooltips = self.prefs_manager.get('interface.show_tooltips', True)
+            if not show_tooltips:
+                # Disable tooltips (would need to implement tooltip management)
+                pass
+        elif key.startswith('alt_text.'):
+            # Refresh alt text availability in batch widget
+            if hasattr(self, 'batch_widget'):
+                self.batch_widget.refresh_alt_text_availability()
+                
+    def on_preferences_reloaded(self):
+        """Handle complete preference reload."""
+        logger.info("Preferences reloaded - updating all UI elements")
+        self.load_preferences()
+        
+        # Update UI elements
+        self.output_folder_edit.setText(str(self.output_folder))
+        self.menu_manager._update_recent_files(self.recent_files)
+        
+        # Refresh alt text availability in batch widget
+        if hasattr(self, 'batch_widget'):
+            self.batch_widget.refresh_alt_text_availability()
+            
+        # Apply interface preferences
+        show_tooltips = self.prefs_manager.get('interface.show_tooltips', True)
+        if not show_tooltips:
+            # Disable tooltips (would need to implement tooltip management)
+            pass
         
     def dragEnterEvent(self, event: QDragEnterEvent):
         """Handle drag enter events."""
@@ -949,38 +995,21 @@ class MainWindow(QMainWindow):
         prefs_window = PreferencesWindow(self)
         
         # Connect the signal before showing the dialog
-        prefs_window.preferences_changed.connect(self.on_preferences_changed)
-        logger.info("Connected preferences_changed signal to on_preferences_changed")
+        prefs_window.preferences_changed.connect(self.on_preferences_dialog_changed)
+        logger.info("Connected preferences_changed signal to on_preferences_dialog_changed")
         
         # Show the dialog (exec blocks until dialog is closed)
         result = prefs_window.exec()
         logger.info(f"Preferences dialog closed with result: {result} (Accepted={QDialog.Accepted})")
         
-        # Note: We don't need to call on_preferences_changed here because
+        # Note: We don't need to call on_preferences_dialog_changed here because
         # it should be called via the signal when Apply or OK is clicked
             
-    def on_preferences_changed(self):
-        """Handle preferences changes."""
-        logger.info("on_preferences_changed called - handling preference changes")
+    def on_preferences_dialog_changed(self):
+        """Handle preferences changes from the preferences dialog (legacy method)."""
+        logger.info("on_preferences_dialog_changed called - triggering preference reload")
         
-        # Reload preferences
-        self.load_preferences()
+        # Force reload from disk to pick up any changes
+        self.prefs_manager.reload_from_disk()
         
-        # Update UI elements
-        self.output_folder_edit.setText(str(self.output_folder))
-        self.menu_manager._update_recent_files(self.recent_files)
-        
-        # Refresh alt text availability in batch widget
-        if hasattr(self, 'batch_widget'):
-            logger.info("Calling batch_widget.refresh_alt_text_availability()")
-            self.batch_widget.refresh_alt_text_availability()
-        else:
-            logger.warning("batch_widget not found as attribute")
-        
-        # Apply interface preferences
-        show_tooltips = self.prefs_manager.get('interface.show_tooltips', True)
-        if not show_tooltips:
-            # Disable tooltips (would need to implement tooltip management)
-            pass
-            
-        logger.info("Preferences updated")
+        logger.info("Preferences dialog changes processed")

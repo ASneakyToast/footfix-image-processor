@@ -104,7 +104,7 @@ class BatchProcessingWidget(QWidget):
         
         # Initialize notification manager and preferences
         self.notification_manager = NotificationManager()
-        self.prefs_manager = PreferencesManager()
+        self.prefs_manager = PreferencesManager.get_instance()
         
         # Apply memory optimization settings from preferences
         memory_limit = self.prefs_manager.get('advanced.memory_limit_mb', 2048)
@@ -276,11 +276,9 @@ class BatchProcessingWidget(QWidget):
         """Refresh alt text checkbox availability based on API key configuration."""
         logger.info("Refreshing alt text checkbox availability")
         
-        # Create a fresh PreferencesManager instance to ensure we get the latest saved values
-        # This is important because the preferences dialog might have its own instance
-        fresh_prefs = PreferencesManager()
-        
-        api_key = fresh_prefs.get('alt_text.api_key')
+        # Use the singleton preferences manager to get the latest values
+        # This ensures we always have the most up-to-date preferences
+        api_key = self.prefs_manager.get('alt_text.api_key')
         logger.info(f"API key check: {'[REDACTED]' if api_key else '[EMPTY]'} (type: {type(api_key)})")
         
         if api_key and api_key.strip():
@@ -290,7 +288,7 @@ class BatchProcessingWidget(QWidget):
                 "Enable automatic alt text generation using AI after image processing"
             )
             # Check the checkbox if it was previously selected
-            enabled_by_default = fresh_prefs.get('alt_text.enabled', False)
+            enabled_by_default = self.prefs_manager.get('alt_text.enabled', False)
             if enabled_by_default:
                 self.enable_alt_text_cb.setChecked(True)
         else:
@@ -300,9 +298,6 @@ class BatchProcessingWidget(QWidget):
             self.enable_alt_text_cb.setToolTip(
                 "Configure Anthropic API key in Preferences → Alt Text to enable alt text generation"
             )
-            
-        # Update our instance's preferences manager too
-        self.prefs_manager = fresh_prefs
         
     def add_images(self):
         """Open dialog to select multiple images."""
@@ -697,12 +692,16 @@ class BatchProcessingWidget(QWidget):
             context = self.prefs_manager.get('alt_text.default_context', 'editorial image')
             self.batch_processor.set_alt_text_context(context)
             
-            self.alt_text_status_label.setText("Alt text generation enabled")
-            self.alt_text_status_label.setStyleSheet("color: green;")
+            # Update status label if it exists (defensive check for initialization order)
+            if hasattr(self, 'alt_text_status_label'):
+                self.alt_text_status_label.setText("Alt text generation enabled")
+                self.alt_text_status_label.setStyleSheet("color: green;")
         else:
             self.batch_processor.set_alt_text_generation(False)
-            self.alt_text_status_label.setText("Alt text generation disabled")
-            self.alt_text_status_label.setStyleSheet("color: #666;")
+            # Update status label if it exists (defensive check for initialization order)
+            if hasattr(self, 'alt_text_status_label'):
+                self.alt_text_status_label.setText("Alt text generation disabled")
+                self.alt_text_status_label.setStyleSheet("color: #666;")
             
         # Update cost estimate
         self.update_cost_estimate()

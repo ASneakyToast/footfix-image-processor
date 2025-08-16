@@ -272,7 +272,7 @@ class AltTextWidget(QWidget):
         super().__init__(parent)
         self.batch_items: List[BatchItem] = []
         self.item_widgets: Dict[str, AltTextItemWidget] = {}
-        self.prefs_manager = PreferencesManager()
+        self.prefs_manager = PreferencesManager.get_instance()
         self.exporter = AltTextExporter()
         self.notification_manager = NotificationManager()
         
