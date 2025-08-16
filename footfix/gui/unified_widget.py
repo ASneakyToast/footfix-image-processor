@@ -1,0 +1,1010 @@
+"""
+Unified processing widget for FootFix GUI.
+Combines single and batch processing into one intelligent interface.
+"""
+
+import logging
+from pathlib import Path
+from typing import Optional, List
+from datetime import timedelta
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
+    QTableWidget, QTableWidgetItem, QHeaderView,
+    QProgressBar, QLabel, QFileDialog, QMessageBox,
+    QGroupBox, QComboBox, QLineEdit, QCheckBox,
+    QScrollArea, QFrame
+)
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtGui import QIcon, QDragEnterEvent, QDropEvent, QFont
+
+from ..core.batch_processor import BatchProcessor, BatchItem, BatchProgress, ProcessingStatus
+from ..core.alt_text_generator import AltTextStatus
+from ..core.processor import ImageProcessor
+from ..presets.profiles import PRESET_REGISTRY, get_preset, PresetConfig
+from ..utils.notifications import NotificationManager
+from ..utils.preferences import PreferencesManager
+from ..utils.filename_template import FilenameTemplate
+from ..utils.alt_text_exporter import AltTextExporter, ExportFormat, ExportOptions
+from .batch_widget import BatchProcessingThread
+from .alt_text_widget import AltTextWidget
+
+logger = logging.getLogger(__name__)
+
+
+class UnifiedProcessingWidget(QWidget):
+    """Unified widget that handles both single and batch image processing."""
+    
+    # Signals
+    processing_started = Signal()
+    processing_completed = Signal(dict)
+    queue_changed = Signal(int)  # Number of items in queue
+    image_loaded = Signal(str)   # For single image compatibility
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.batch_processor = BatchProcessor()
+        self.processing_thread: Optional[BatchProcessingThread] = None
+        self.is_processing = False
+        
+        # Initialize managers
+        self.notification_manager = NotificationManager()
+        self.prefs_manager = PreferencesManager.get_instance()
+        self.filename_template = FilenameTemplate()
+        
+        # Apply memory optimization settings from preferences
+        memory_limit = self.prefs_manager.get('advanced.memory_limit_mb', 2048)
+        self.batch_processor.set_memory_limit(memory_limit)
+        self.batch_processor.set_memory_optimization(True)
+        
+        # Load preferences
+        self.load_preferences()
+        
+        self.setup_ui()
+        
+        # Timer for UI updates during processing
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.update_time_display)
+        
+    def setup_ui(self):
+        """Set up the unified user interface."""
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(15)
+        
+        # Smart Queue Area - collapsible based on content
+        self.setup_queue_area(main_layout)
+        
+        # Processing Controls - always visible
+        self.setup_processing_controls(main_layout)
+        
+        # Action Buttons - always visible  
+        self.setup_action_buttons(main_layout)
+        
+        # Progress Area - shown during processing
+        self.setup_progress_area(main_layout)
+        
+        # Alt Text Integration
+        self.setup_alt_text_integration(main_layout)
+        
+        # Enable drag and drop
+        self.setAcceptDrops(True)
+        
+        # Initialize UI state for empty queue
+        self.update_queue_display()
+        
+    def setup_queue_area(self, main_layout):
+        """Set up the smart queue area that adapts to content."""
+        self.queue_group = QGroupBox("Image Queue")
+        queue_layout = QVBoxLayout(self.queue_group)
+        
+        # Queue controls toolbar
+        toolbar_layout = QHBoxLayout()
+        
+        self.add_images_btn = QPushButton("Add Images")
+        self.add_images_btn.clicked.connect(self.add_images)
+        toolbar_layout.addWidget(self.add_images_btn)
+        
+        self.add_folder_btn = QPushButton("Add Folder")
+        self.add_folder_btn.clicked.connect(self.add_folder)
+        toolbar_layout.addWidget(self.add_folder_btn)
+        
+        self.clear_queue_btn = QPushButton("Clear All")
+        self.clear_queue_btn.clicked.connect(self.clear_queue)
+        toolbar_layout.addWidget(self.clear_queue_btn)
+        
+        toolbar_layout.addStretch()
+        
+        self.queue_count_label = QLabel("0 images")
+        toolbar_layout.addWidget(self.queue_count_label)
+        
+        queue_layout.addLayout(toolbar_layout)
+        
+        # Drop zone / queue display area
+        self.setup_queue_display(queue_layout)
+        
+        main_layout.addWidget(self.queue_group)
+        
+    def setup_queue_display(self, parent_layout):
+        """Set up the queue display that adapts from drop zone to queue table."""
+        # Container for switching between drop zone and queue table
+        self.queue_container = QWidget()
+        container_layout = QVBoxLayout(self.queue_container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Drop zone for empty state
+        self.drop_zone = QLabel("Drag images here or use buttons above to add images")
+        self.drop_zone.setAlignment(Qt.AlignCenter)
+        self.drop_zone.setMinimumHeight(150)
+        self.drop_zone.setStyleSheet("""
+            QLabel {
+                border: 2px dashed #aaa;
+                border-radius: 10px;
+                padding: 20px;
+                background-color: #f8f8f8;
+                color: #666;
+                font-size: 14px;
+            }
+        """)
+        container_layout.addWidget(self.drop_zone)
+        
+        # Queue table for when we have images
+        self.queue_table = QTableWidget()
+        self.queue_table.setColumnCount(5)
+        self.queue_table.setHorizontalHeaderLabels(["Filename", "Size", "Status", "Error", "Actions"])
+        self.queue_table.horizontalHeader().setStretchLastSection(True)
+        self.queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.queue_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.queue_table.itemSelectionChanged.connect(self.on_selection_changed)
+        self.queue_table.setVisible(False)  # Hidden initially
+        container_layout.addWidget(self.queue_table)
+        
+        parent_layout.addWidget(self.queue_container)
+        
+    def setup_processing_controls(self, main_layout):
+        """Set up the processing controls section."""
+        controls_group = QGroupBox("Processing Options")
+        controls_layout = QVBoxLayout(controls_group)
+        
+        # Preset selection
+        preset_layout = QHBoxLayout()
+        preset_layout.addWidget(QLabel("Preset:"))
+        
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItem("Editorial Web (Max 2560×1440, 0.5-1MB)", "editorial_web")
+        self.preset_combo.addItem("Email (Max 600px width, <100KB)", "email")
+        self.preset_combo.addItem("Instagram Story (1080×1920)", "instagram_story")
+        self.preset_combo.addItem("Instagram Feed Portrait (1080×1350)", "instagram_feed_portrait")
+        
+        # Add tooltips for each preset
+        self.preset_combo.setItemData(0, 
+            "Optimized for web articles and galleries.\n"
+            "Maximum dimensions: 2560×1440 pixels\n"
+            "Target file size: 0.5-1MB\n"
+            "Perfect for editorial content and blog posts.",
+            Qt.ToolTipRole
+        )
+        self.preset_combo.setItemData(1,
+            "Small file size for email attachments.\n"
+            "Maximum width: 600 pixels\n"
+            "Target file size: <100KB\n"
+            "Ensures images load quickly in email clients.",
+            Qt.ToolTipRole
+        )
+        self.preset_combo.setItemData(2,
+            "Instagram Stories format.\n"
+            "Exact dimensions: 1080×1920 pixels (9:16)\n"
+            "Images will be cropped to fit if needed.\n"
+            "Optimized for mobile viewing.",
+            Qt.ToolTipRole
+        )
+        self.preset_combo.setItemData(3,
+            "Instagram Feed portrait format.\n"
+            "Exact dimensions: 1080×1350 pixels (4:5)\n"
+            "Images will be cropped to fit if needed.\n"
+            "Ideal for Instagram posts.",
+            Qt.ToolTipRole
+        )
+        
+        preset_layout.addWidget(self.preset_combo, 1)
+        
+        # Advanced settings button
+        self.advanced_button = QPushButton("Advanced...")
+        self.advanced_button.clicked.connect(self.show_advanced_settings)
+        preset_layout.addWidget(self.advanced_button)
+        
+        controls_layout.addLayout(preset_layout)
+        
+        # Output folder selection
+        output_layout = QHBoxLayout()
+        output_layout.addWidget(QLabel("Output Folder:"))
+        
+        self.output_folder_edit = QLineEdit(str(self.output_folder))
+        self.output_folder_edit.setReadOnly(True)
+        output_layout.addWidget(self.output_folder_edit, 1)
+        
+        browse_button = QPushButton("Browse")
+        browse_button.clicked.connect(self.select_output_folder)
+        output_layout.addWidget(browse_button)
+        
+        # Output settings button
+        output_settings_button = QPushButton("Settings...")
+        output_settings_button.clicked.connect(self.show_output_settings)
+        output_layout.addWidget(output_settings_button)
+        
+        controls_layout.addLayout(output_layout)
+        
+        main_layout.addWidget(controls_group)
+        
+    def setup_action_buttons(self, main_layout):
+        """Set up the action buttons that adapt based on queue size."""
+        button_layout = QHBoxLayout()
+        
+        # Preview button
+        self.preview_button = QPushButton("Preview Selected")
+        self.preview_button.clicked.connect(self.show_preview)
+        self.preview_button.setEnabled(False)
+        self.preview_button.setMinimumHeight(40)
+        self.preview_button.setStyleSheet("""
+            QPushButton {
+                font-size: 16px;
+            }
+            QPushButton:enabled {
+                background-color: #28a745;
+                color: white;
+            }
+        """)
+        button_layout.addWidget(self.preview_button)
+        
+        # Main process button - text adapts to queue size
+        self.process_button = QPushButton("Add Images to Start")
+        self.process_button.clicked.connect(self.start_processing)
+        self.process_button.setEnabled(False)
+        self.process_button.setMinimumHeight(40)
+        self.process_button.setStyleSheet("""
+            QPushButton {
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QPushButton:enabled {
+                background-color: #007AFF;
+                color: white;
+            }
+        """)
+        button_layout.addWidget(self.process_button)
+        
+        # Cancel button
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.cancel_processing)
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.setMinimumHeight(40)
+        button_layout.addWidget(self.cancel_button)
+        
+        main_layout.addLayout(button_layout)
+        
+    def setup_progress_area(self, main_layout):
+        """Set up the progress display area."""
+        self.progress_group = QGroupBox("Processing Progress")
+        progress_layout = QVBoxLayout(self.progress_group)
+        
+        # Overall progress
+        self.overall_progress_label = QLabel("Ready to process")
+        progress_layout.addWidget(self.overall_progress_label)
+        
+        self.overall_progress_bar = QProgressBar()
+        self.overall_progress_bar.setTextVisible(True)
+        progress_layout.addWidget(self.overall_progress_bar)
+        
+        # Current item progress
+        self.current_item_label = QLabel("")
+        self.current_item_label.setVisible(False)
+        progress_layout.addWidget(self.current_item_label)
+        
+        # Time estimation
+        time_layout = QHBoxLayout()
+        self.elapsed_label = QLabel("Elapsed: --:--")
+        time_layout.addWidget(self.elapsed_label)
+        
+        time_layout.addStretch()
+        
+        self.remaining_label = QLabel("Remaining: --:--")
+        time_layout.addWidget(self.remaining_label)
+        
+        progress_layout.addLayout(time_layout)
+        
+        # Initially hidden
+        self.progress_group.setVisible(False)
+        main_layout.addWidget(self.progress_group)
+        
+    def setup_alt_text_integration(self, main_layout):
+        """Set up alt text generation integration."""
+        # Alt text options
+        alt_text_layout = QHBoxLayout()
+        
+        self.enable_alt_text_cb = QCheckBox("Generate Alt Text")
+        self.enable_alt_text_cb.setToolTip(
+            "Enable automatic alt text generation using AI after image processing"
+        )
+        self.enable_alt_text_cb.toggled.connect(self.on_alt_text_toggled)
+        alt_text_layout.addWidget(self.enable_alt_text_cb)
+        
+        # Quick export button (only visible when alt text results are available)
+        self.quick_export_btn = QPushButton("Export Alt Text")
+        self.quick_export_btn.setToolTip("Quick export alt text results to CSV")
+        self.quick_export_btn.clicked.connect(self.quick_export_alt_text)
+        self.quick_export_btn.setVisible(False)
+        alt_text_layout.addWidget(self.quick_export_btn)
+        
+        alt_text_layout.addStretch()
+        
+        self.alt_text_status_label = QLabel("")
+        alt_text_layout.addWidget(self.alt_text_status_label)
+        
+        main_layout.addLayout(alt_text_layout)
+        
+        # Check if API key is configured
+        self.refresh_alt_text_availability()
+        
+        # Alt text widget for managing generated text
+        self.alt_text_widget = AltTextWidget()
+        self.alt_text_widget.alt_text_updated.connect(self.on_alt_text_updated)
+        self.alt_text_widget.regenerate_requested.connect(self.on_regenerate_requested)
+        self.alt_text_widget.setVisible(False)  # Hidden until we have alt text results
+        main_layout.addWidget(self.alt_text_widget)
+        
+    def refresh_alt_text_availability(self):
+        """Refresh alt text checkbox availability based on API key configuration."""
+        logger.info("Refreshing alt text checkbox availability")
+        
+        # Use fresh preferences manager to get latest values
+        api_key = self.prefs_manager.get('alt_text.api_key')
+        
+        if api_key and api_key.strip():
+            logger.info("API key found - enabling alt text checkbox")
+            self.enable_alt_text_cb.setEnabled(True)
+            self.enable_alt_text_cb.setToolTip(
+                "Enable automatic alt text generation using AI after image processing"
+            )
+            # Check the checkbox if it was previously selected
+            enabled_by_default = self.prefs_manager.get('alt_text.enabled', False)
+            if enabled_by_default:
+                self.enable_alt_text_cb.setChecked(True)
+        else:
+            logger.info("No API key found - disabling alt text checkbox")
+            self.enable_alt_text_cb.setEnabled(False)
+            self.enable_alt_text_cb.setChecked(False)
+            self.enable_alt_text_cb.setToolTip(
+                "Configure Anthropic API key in Preferences → Alt Text to enable alt text generation"
+            )
+            
+    def load_preferences(self):
+        """Load preferences from the preferences manager."""
+        self.output_folder = Path(self.prefs_manager.get('output.default_folder', Path.home() / "Downloads"))
+        
+        self.output_settings = {
+            'output_folder': self.output_folder,
+            'filename_template': self.prefs_manager.get('output.filename_template', '{original_name}_{preset}'),
+            'duplicate_strategy': self.prefs_manager.get('output.duplicate_strategy', 'rename'),
+            'recent_folders': self.prefs_manager.get('output.recent_folders', []),
+            'favorite_folders': self.prefs_manager.get('output.favorite_folders', [])
+        }
+        
+    def update_queue_display(self):
+        """Update the queue display based on current queue state."""
+        queue_info = self.batch_processor.get_queue_info()
+        queue_size = len(queue_info)
+        
+        # Update queue count
+        if queue_size == 0:
+            self.queue_count_label.setText("0 images")
+        elif queue_size == 1:
+            self.queue_count_label.setText("1 image")
+        else:
+            self.queue_count_label.setText(f"{queue_size} images")
+            
+        # Smart UI adaptation based on queue size
+        if queue_size == 0:
+            # Show drop zone, hide table
+            self.drop_zone.setVisible(True)
+            self.queue_table.setVisible(False)
+            self.process_button.setText("Add Images to Start")
+            self.process_button.setEnabled(False)
+            self.preview_button.setEnabled(False)
+        else:
+            # Show table, hide drop zone
+            self.drop_zone.setVisible(False)
+            self.queue_table.setVisible(True)
+            
+            # Update process button text
+            if queue_size == 1:
+                self.process_button.setText("Process Image")
+            else:
+                self.process_button.setText(f"Process {queue_size} Images")
+            self.process_button.setEnabled(not self.is_processing)
+            
+            # Update table content
+            self.update_queue_table(queue_info)
+            
+        # Update preview button
+        selected_rows = self.queue_table.selectionModel().selectedRows() if queue_size > 0 else []
+        self.preview_button.setEnabled(len(selected_rows) == 1 and not self.is_processing)
+        
+        # Show/hide export button based on alt text availability
+        has_alt_text = any(
+            item.alt_text_status == AltTextStatus.COMPLETED and item.alt_text
+            for item in self.batch_processor.queue
+        )
+        self.quick_export_btn.setVisible(has_alt_text)
+        
+        # Update alt text widget data but keep it hidden (handled by dedicated tab now)
+        if has_alt_text and self.enable_alt_text_cb.isChecked():
+            self.alt_text_widget.set_batch_items(self.batch_processor.queue)
+        # Keep alt text widget hidden - alt text review is now handled by dedicated tab
+        self.alt_text_widget.setVisible(False)
+            
+        # Emit signal
+        self.queue_changed.emit(queue_size)
+        
+        # For single image compatibility
+        if queue_size == 1:
+            self.image_loaded.emit(str(self.batch_processor.queue[0].source_path))
+            
+    def update_queue_table(self, queue_info):
+        """Update the queue table with current queue information."""
+        self.queue_table.setRowCount(len(queue_info))
+        
+        for row, item_info in enumerate(queue_info):
+            # Filename
+            self.queue_table.setItem(row, 0, QTableWidgetItem(item_info['filename']))
+            
+            # Size
+            size_mb = item_info['size'] / (1024 * 1024)
+            self.queue_table.setItem(row, 1, QTableWidgetItem(f"{size_mb:.1f} MB"))
+            
+            # Status
+            status_item = QTableWidgetItem(item_info['status'])
+            if item_info['status'] == 'completed':
+                status_item.setForeground(Qt.green)
+            elif item_info['status'] == 'failed':
+                status_item.setForeground(Qt.red)
+            elif item_info['status'] == 'processing':
+                status_item.setForeground(Qt.blue)
+            self.queue_table.setItem(row, 2, status_item)
+            
+            # Error
+            error_text = item_info['error'] or ""
+            self.queue_table.setItem(row, 3, QTableWidgetItem(error_text))
+            
+            # Remove button
+            if not self.is_processing and item_info['status'] == 'pending':
+                remove_btn = QPushButton("Remove")
+                remove_btn.clicked.connect(lambda checked, idx=row: self.remove_item(idx))
+                self.queue_table.setCellWidget(row, 4, remove_btn)
+            else:
+                self.queue_table.setCellWidget(row, 4, None)
+                
+    # Drag and Drop Support
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """Handle drag enter events."""
+        if event.mimeData().hasUrls():
+            # Check if any URL is a valid image or directory
+            for url in event.mimeData().urls():
+                path = Path(url.toLocalFile())
+                if path.is_dir() or path.suffix.lower() in ImageProcessor.SUPPORTED_FORMATS:
+                    event.acceptProposedAction()
+                    # Visual feedback
+                    self.drop_zone.setStyleSheet("""
+                        QLabel {
+                            border: 2px solid #007AFF;
+                            border-radius: 10px;
+                            padding: 20px;
+                            background-color: #e6f2ff;
+                            color: #007AFF;
+                            font-size: 14px;
+                        }
+                    """)
+                    return
+                    
+    def dropEvent(self, event: QDropEvent):
+        """Handle drop events."""
+        # Reset visual feedback
+        self.drop_zone.setStyleSheet("""
+            QLabel {
+                border: 2px dashed #aaa;
+                border-radius: 10px;
+                padding: 20px;
+                background-color: #f8f8f8;
+                color: #666;
+                font-size: 14px;
+            }
+        """)
+        
+        urls = event.mimeData().urls()
+        if not urls:
+            return
+            
+        # Collect all valid image paths
+        image_paths = []
+        
+        for url in urls:
+            path = Path(url.toLocalFile())
+            
+            if path.is_file() and path.suffix.lower() in ImageProcessor.SUPPORTED_FORMATS:
+                image_paths.append(path)
+            elif path.is_dir():
+                # Add all images from directory
+                for img_path in path.rglob('*'):
+                    if img_path.is_file() and img_path.suffix.lower() in ImageProcessor.SUPPORTED_FORMATS:
+                        image_paths.append(img_path)
+                        
+        if not image_paths:
+            QMessageBox.warning(
+                self,
+                "No Valid Images",
+                "No valid image files were found in the dropped items."
+            )
+            return
+            
+        # Add all images to queue
+        added = self.add_images_to_queue(image_paths)
+        if added > 0:
+            QMessageBox.information(
+                self,
+                "Images Added",
+                f"Added {added} images to processing queue."
+            )
+            
+    def dragLeaveEvent(self, event):
+        """Handle drag leave events."""
+        # Reset visual feedback
+        self.drop_zone.setStyleSheet("""
+            QLabel {
+                border: 2px dashed #aaa;
+                border-radius: 10px;
+                padding: 20px;
+                background-color: #f8f8f8;
+                color: #666;
+                font-size: 14px;
+            }
+        """)
+        
+    # Queue Management Methods
+    def add_images(self):
+        """Open dialog to select multiple images."""
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select Images",
+            str(Path.home()),
+            "Image Files (*.jpg *.jpeg *.png *.tiff *.tif)"
+        )
+        
+        if files:
+            added_count = 0
+            for file_path in files:
+                if self.batch_processor.add_image(Path(file_path)):
+                    added_count += 1
+                    
+            self.update_queue_display()
+            if added_count > 0:
+                logger.info(f"Added {added_count} images to queue")
+                
+    def add_folder(self):
+        """Open dialog to select a folder containing images."""
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select Folder Containing Images",
+            str(Path.home())
+        )
+        
+        if folder:
+            added_count = self.batch_processor.add_folder(Path(folder))
+            self.update_queue_display()
+            if added_count > 0:
+                logger.info(f"Added {added_count} images from folder")
+            else:
+                QMessageBox.warning(
+                    self,
+                    "No Images Found",
+                    "No compatible images found in the selected folder."
+                )
+                
+    def add_images_to_queue(self, file_paths: List[Path]):
+        """Add multiple images to the queue."""
+        added_count = 0
+        for path in file_paths:
+            if self.batch_processor.add_image(path):
+                added_count += 1
+                
+        self.update_queue_display()
+        return added_count
+        
+    def clear_queue(self):
+        """Clear all images from the queue."""
+        if self.is_processing:
+            QMessageBox.warning(
+                self,
+                "Processing Active",
+                "Cannot clear queue while processing is active."
+            )
+            return
+            
+        if self.batch_processor.queue:
+            reply = QMessageBox.question(
+                self,
+                "Clear Queue",
+                f"Remove all {len(self.batch_processor.queue)} images from queue?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            
+            if reply == QMessageBox.Yes:
+                self.batch_processor.clear_queue()
+                self.update_queue_display()
+                logger.info("Queue cleared")
+                
+    def remove_item(self, index: int):
+        """Remove an item from the queue."""
+        if self.is_processing:
+            QMessageBox.warning(
+                self,
+                "Processing Active",
+                "Cannot modify queue while processing is active."
+            )
+            return
+            
+        if self.batch_processor.remove_image(index):
+            self.update_queue_display()
+            
+    def on_selection_changed(self):
+        """Handle table selection changes."""
+        # Enable/disable preview button based on selection
+        selected_rows = self.queue_table.selectionModel().selectedRows()
+        self.preview_button.setEnabled(len(selected_rows) == 1 and not self.is_processing)
+        
+    # Processing Methods
+    def start_processing(self):
+        """Start processing with current settings."""
+        if not self.batch_processor.queue:
+            return
+            
+        # Get preset and output folder
+        preset_name = self.preset_combo.currentData()
+        output_folder = self.output_folder
+        
+        # Start processing
+        self.is_processing = True
+        self.processing_started.emit()
+        
+        # Update UI
+        self.process_button.setText("Processing...")
+        self.process_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        self.add_images_btn.setEnabled(False)
+        self.add_folder_btn.setEnabled(False)
+        self.clear_queue_btn.setEnabled(False)
+        
+        # Show progress area
+        self.progress_group.setVisible(True)
+        self.overall_progress_bar.setValue(0)
+        self.current_item_label.setVisible(True)
+        
+        # Start timer
+        self.update_timer.start(100)  # Update every 100ms
+        
+        # Create and start processing thread
+        self.processing_thread = BatchProcessingThread(
+            self.batch_processor,
+            preset_name,
+            output_folder,
+            generate_alt_text=self.enable_alt_text_cb.isChecked()
+        )
+        
+        self.processing_thread.progress_updated.connect(self.on_progress_updated)
+        self.processing_thread.item_completed.connect(self.on_item_completed)
+        self.processing_thread.batch_completed.connect(self.on_batch_completed)
+        self.processing_thread.status_message.connect(lambda msg: logger.info(msg))
+        
+        self.processing_thread.start()
+        
+    def cancel_processing(self):
+        """Cancel the current processing."""
+        if self.processing_thread and self.processing_thread.isRunning():
+            self.processing_thread.cancel()
+            self.cancel_button.setEnabled(False)
+            self.cancel_button.setText("Cancelling...")
+            
+    def on_progress_updated(self, progress: BatchProgress):
+        """Handle progress updates from processing thread."""
+        # Update progress bar
+        if progress.total_items > 0:
+            percentage = ((progress.completed_items + progress.failed_items) / progress.total_items) * 100
+            self.overall_progress_bar.setValue(int(percentage))
+            
+        # Update labels
+        self.overall_progress_label.setText(
+            f"Processing {progress.current_item_index + 1} of {progress.total_items} - "
+            f"{progress.completed_items} completed, {progress.failed_items} failed"
+        )
+        
+        if progress.current_item_name:
+            self.current_item_label.setText(f"Current: {progress.current_item_name}")
+            
+    def on_item_completed(self, item: BatchItem):
+        """Handle item completion updates."""
+        self.update_queue_display()
+        
+    def on_batch_completed(self, results: dict):
+        """Handle processing completion."""
+        self.is_processing = False
+        self.update_timer.stop()
+        
+        # Update UI
+        queue_size = len(self.batch_processor.queue)
+        if queue_size == 0:
+            self.process_button.setText("Add Images to Start")
+        elif queue_size == 1:
+            self.process_button.setText("Process Image")
+        else:
+            self.process_button.setText(f"Process {queue_size} Images")
+            
+        self.process_button.setEnabled(queue_size > 0)
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.setText("Cancel")
+        self.add_images_btn.setEnabled(True)
+        self.add_folder_btn.setEnabled(True)
+        self.clear_queue_btn.setEnabled(True)
+        self.current_item_label.setVisible(False)
+        
+        # Hide progress area if all items are processed
+        if results.get('success', False) and not results.get('cancelled', False):
+            self.progress_group.setVisible(False)
+        
+        # Update displays
+        self.update_queue_display()
+        
+        # Show results
+        if results.get('cancelled'):
+            message = f"Processing cancelled.\n\n"
+        else:
+            message = f"Processing completed.\n\n"
+            
+        message += (
+            f"Total processed: {results.get('total_processed', 0)}\n"
+            f"Successful: {results.get('successful', 0)}\n"
+            f"Failed: {results.get('failed', 0)}\n"
+            f"Time elapsed: {self._format_time(results.get('elapsed_time', 0))}"
+        )
+        
+        # Add alt text results if applicable
+        if 'alt_text_generated' in results:
+            message += f"\n\nAlt text generated: {results.get('alt_text_generated', 0)}"
+            if results.get('alt_text_failed', 0) > 0:
+                message += f"\nAlt text failed: {results.get('alt_text_failed', 0)}"
+        
+        # Show system notification if enabled
+        if self.prefs_manager.get('processing.completion_notification', True):
+            self.notification_manager.set_sound_enabled(
+                self.prefs_manager.get('processing.completion_sound', True)
+            )
+            
+            if not results.get('cancelled'):
+                if queue_size == 1:
+                    # Single image notification
+                    item_name = self.batch_processor.queue[0].source_path.name if self.batch_processor.queue else "image"
+                    self.notification_manager.show_single_completion(
+                        item_name,
+                        results.get('successful', 0) > 0
+                    )
+                else:
+                    # Batch notification
+                    self.notification_manager.show_batch_completion(
+                        successful=results.get('successful', 0),
+                        failed=results.get('failed', 0),
+                        elapsed_time=results.get('elapsed_time', 0)
+                    )
+        
+        # Show dialog
+        if results.get('success'):
+            QMessageBox.information(self, "Processing Complete", message)
+        else:
+            QMessageBox.warning(self, "Processing Complete with Errors", message)
+            
+        # Emit completion signal
+        self.processing_completed.emit(results)
+        
+    def update_time_display(self):
+        """Update time display during processing."""
+        if not self.is_processing or not hasattr(self.batch_processor, 'progress'):
+            return
+            
+        progress = self.batch_processor.progress
+        
+        # Update elapsed time
+        self.elapsed_label.setText(f"Elapsed: {self._format_time(progress.elapsed_time)}")
+        
+        # Update remaining time
+        if progress.estimated_time_remaining > 0:
+            self.remaining_label.setText(f"Remaining: {self._format_time(progress.estimated_time_remaining)}")
+        else:
+            self.remaining_label.setText("Remaining: Calculating...")
+            
+    def _format_time(self, seconds: float) -> str:
+        """Format time in seconds to human-readable string."""
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        else:
+            td = timedelta(seconds=int(seconds))
+            return str(td).split('.')[0]  # Remove microseconds
+            
+    # Preview and Settings Methods
+    def show_preview(self):
+        """Show preview for the selected image."""
+        selected_rows = self.queue_table.selectionModel().selectedRows()
+        if not selected_rows:
+            return
+            
+        # Get the selected item
+        row = selected_rows[0].row()
+        if row >= len(self.batch_processor.queue):
+            return
+            
+        batch_item = self.batch_processor.queue[row]
+        
+        # Get parent window (main window)
+        parent = self.window()
+        if not hasattr(parent, 'show_preview'):
+            logger.error("Parent window doesn't have show_preview method")
+            return
+            
+        # Load the image and show preview
+        if parent.processor.load_image(batch_item.source_path):
+            parent.current_image_path = batch_item.source_path
+            parent.show_preview()
+        else:
+            QMessageBox.warning(
+                self,
+                "Preview Error",
+                f"Could not load image for preview: {batch_item.source_path.name}"
+            )
+            
+    def show_advanced_settings(self):
+        """Show the advanced settings dialog."""
+        # Get parent window to access its advanced settings method
+        parent = self.window()
+        if hasattr(parent, 'show_advanced_settings'):
+            parent.show_advanced_settings()
+            
+    def select_output_folder(self):
+        """Open folder dialog to select output directory."""
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select Output Folder",
+            str(self.output_folder)
+        )
+        
+        if folder:
+            self.output_folder = Path(folder)
+            self.output_folder_edit.setText(str(self.output_folder))
+            self.output_settings['output_folder'] = self.output_folder
+            
+    def show_output_settings(self):
+        """Show the output settings dialog."""
+        # Get parent window to access its output settings method
+        parent = self.window()
+        if hasattr(parent, 'show_output_settings'):
+            parent.show_output_settings()
+            
+    # Alt Text Methods
+    def on_alt_text_toggled(self, checked: bool):
+        """Handle alt text generation toggle."""
+        if checked:
+            # Check API key again
+            api_key = self.prefs_manager.get('alt_text.api_key')
+            if not api_key:
+                self.enable_alt_text_cb.setChecked(False)
+                QMessageBox.warning(
+                    self,
+                    "API Key Required",
+                    "Please configure your Anthropic API key in preferences to enable alt text generation."
+                )
+                return
+                
+            # Configure batch processor
+            self.batch_processor.set_alt_text_generation(True, api_key)
+            context = self.prefs_manager.get('alt_text.default_context', 'editorial image')
+            self.batch_processor.set_alt_text_context(context)
+            
+            self.alt_text_status_label.setText("Alt text generation enabled")
+            self.alt_text_status_label.setStyleSheet("color: green;")
+        else:
+            self.batch_processor.set_alt_text_generation(False)
+            self.alt_text_status_label.setText("Alt text generation disabled")
+            self.alt_text_status_label.setStyleSheet("color: #666;")
+            
+    def on_alt_text_updated(self, updates: dict):
+        """Handle alt text updates from the widget."""
+        # Update batch items with new alt text
+        for filename, alt_text in updates.items():
+            for item in self.batch_processor.queue:
+                if item.source_path.name == filename:
+                    item.alt_text = alt_text
+                    break
+                    
+        logger.info(f"Updated alt text for {len(updates)} items")
+        
+    def on_regenerate_requested(self, filenames: list):
+        """Handle alt text regeneration requests."""
+        if not self.batch_processor.alt_text_generator:
+            QMessageBox.warning(
+                self,
+                "Alt Text Not Configured",
+                "Please enable alt text generation first."
+            )
+            return
+            
+        # Mark items for regeneration
+        items_to_regenerate = []
+        for filename in filenames:
+            for item in self.batch_processor.queue:
+                if item.source_path.name == filename:
+                    item.alt_text_status = AltTextStatus.PENDING
+                    items_to_regenerate.append(item)
+                    break
+                    
+        if items_to_regenerate:
+            logger.info(f"Marked {len(items_to_regenerate)} items for alt text regeneration")
+            
+    def quick_export_alt_text(self):
+        """Quick export alt text results to CSV."""
+        # Check if we have any completed alt text items
+        completed_items = [
+            item for item in self.batch_processor.queue
+            if item.alt_text_status == AltTextStatus.COMPLETED and item.alt_text
+        ]
+        
+        if not completed_items:
+            QMessageBox.information(
+                self,
+                "No Data to Export",
+                "No completed alt text results to export."
+            )
+            return
+            
+        # Generate default filename
+        exporter = AltTextExporter()
+        default_filename = exporter.generate_filename(ExportFormat.CSV)
+        
+        # Get save location
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Alt Text Results",
+            str(Path.home() / "Downloads" / default_filename),
+            "CSV Files (*.csv)"
+        )
+        
+        if not output_path:
+            return
+            
+        output_path = Path(output_path)
+        
+        # Export all completed items
+        success, message = exporter.export_csv(
+            self.batch_processor.queue,
+            output_path,
+            ExportOptions.COMPLETED_ONLY
+        )
+        
+        if success:
+            QMessageBox.information(
+                self,
+                "Export Complete",
+                f"Alt text results exported to:\n{output_path.name}"
+            )
+            
+            # Open in finder
+            import subprocess
+            subprocess.run(["open", "-R", str(output_path)])
+        else:
+            QMessageBox.critical(
+                self,
+                "Export Failed",
+                message
+            )

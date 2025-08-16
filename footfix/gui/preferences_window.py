@@ -520,7 +520,6 @@ class PreferencesWindow(QDialog):
         
         # Initialize usage stats display
         self.update_usage_stats()
-        self.update_cost_estimate()
         
         # Advanced
         self.memory_spin.setValue(self.prefs_manager.get('advanced.memory_limit_mb', 2048))
