@@ -401,24 +401,6 @@ class PreferencesWindow(QDialog):
         
         cost_layout.addLayout(stats_grid)
         
-        # Cost estimation
-        estimate_layout = QHBoxLayout()
-        estimate_layout.addWidget(QLabel("Estimate cost for"))
-        
-        self.estimate_count_spin = QSpinBox()
-        self.estimate_count_spin.setRange(1, 10000)
-        self.estimate_count_spin.setValue(100)
-        self.estimate_count_spin.valueChanged.connect(self.update_cost_estimate)
-        estimate_layout.addWidget(self.estimate_count_spin)
-        
-        estimate_layout.addWidget(QLabel("images:"))
-        
-        self.estimate_label = QLabel("$0.00")
-        self.estimate_label.setStyleSheet("font-weight: bold;")
-        estimate_layout.addWidget(self.estimate_label)
-        
-        estimate_layout.addStretch()
-        cost_layout.addLayout(estimate_layout)
         
         cost_group.setLayout(cost_layout)
         layout.addWidget(cost_group)
@@ -725,16 +707,7 @@ class PreferencesWindow(QDialog):
         self.total_requests_label.setText(f"Total requests: {total_stats.get('requests', 0)}")
         self.total_cost_label.setText(f"Total cost: ${total_stats.get('cost', 0):.2f}")
         
-        # Update cost estimate
-        self.update_cost_estimate()
         
-    def update_cost_estimate(self):
-        """Update the cost estimate based on spinner value."""
-        count = self.estimate_count_spin.value()
-        # Using the standard cost per image from alt_text_generator.py
-        cost_per_image = 0.006
-        total_cost = count * cost_per_image
-        self.estimate_label.setText(f"${total_cost:.2f}")
         
     def reset_usage_stats(self):
         """Reset usage statistics."""

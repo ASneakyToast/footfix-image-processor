@@ -260,10 +260,6 @@ class BatchProcessingWidget(QWidget):
         # Check if API key is configured
         self.refresh_alt_text_availability()
         
-        # Cost estimation label
-        self.cost_estimate_label = QLabel("")
-        self.cost_estimate_label.setStyleSheet("color: #666; margin-left: 10px;")
-        alt_text_options_layout.addWidget(self.cost_estimate_label)
         
         alt_text_options_layout.addStretch()
         
@@ -424,8 +420,6 @@ class BatchProcessingWidget(QWidget):
         # Emit signal
         self.queue_changed.emit(queue_count)
         
-        # Update cost estimate
-        self.update_cost_estimate()
         
         # Show/hide export button based on alt text availability
         has_alt_text = any(
@@ -434,27 +428,6 @@ class BatchProcessingWidget(QWidget):
         )
         self.quick_export_btn.setVisible(has_alt_text)
         
-    def update_cost_estimate(self):
-        """Update the cost estimate for alt text generation."""
-        if not self.enable_alt_text_cb.isChecked():
-            self.cost_estimate_label.setText("")
-            return
-            
-        queue_count = len(self.batch_processor.queue)
-        if queue_count == 0:
-            self.cost_estimate_label.setText("")
-            return
-            
-        # Get cost estimate from alt text generator
-        if self.batch_processor.alt_text_generator:
-            estimates = self.batch_processor.alt_text_generator.estimate_batch_cost(queue_count)
-            total_cost = estimates['total']
-            self.cost_estimate_label.setText(f"Est. cost: ${total_cost:.2f}")
-        else:
-            # Fallback estimate if generator not initialized
-            cost_per_image = 0.006
-            total_cost = queue_count * cost_per_image
-            self.cost_estimate_label.setText(f"Est. cost: ${total_cost:.2f}")
         
     def start_processing(self):
         """Start batch processing with current settings."""
@@ -703,8 +676,6 @@ class BatchProcessingWidget(QWidget):
                 self.alt_text_status_label.setText("Alt text generation disabled")
                 self.alt_text_status_label.setStyleSheet("color: #666;")
             
-        # Update cost estimate
-        self.update_cost_estimate()
             
     def on_alt_text_updated(self, updates: dict):
         """Handle alt text updates from the widget."""

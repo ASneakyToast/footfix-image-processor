@@ -60,7 +60,6 @@ class AltTextGenerator:
     MAX_RETRY_DELAY = 60.0  # Maximum delay between retries
     
     # Cost estimation (approximate)
-    COST_PER_IMAGE = 0.006  # $0.006 per image analysis
     
     # Error handling configuration
     NETWORK_TIMEOUT = 30  # seconds
@@ -274,7 +273,7 @@ For editorial content, emphasize:
                             if data.get("content") and len(data["content"]) > 0:
                                 result.alt_text = data["content"][0]["text"].strip()
                                 result.status = AltTextStatus.COMPLETED
-                                result.api_cost = self.COST_PER_IMAGE
+                                result.api_cost = None
                                 logger.info(f"Generated alt text for {image_path.name}")
                                 
                                 # Track usage if enabled
@@ -376,21 +375,6 @@ For editorial content, emphasize:
                 
         return results
         
-    def estimate_batch_cost(self, num_images: int) -> Dict[str, float]:
-        """
-        Estimate the cost for processing a batch of images.
-        
-        Args:
-            num_images: Number of images to process
-            
-        Returns:
-            Dictionary with cost estimates
-        """
-        return {
-            "per_image": self.COST_PER_IMAGE,
-            "total": self.COST_PER_IMAGE * num_images,
-            "monthly_estimate": self.COST_PER_IMAGE * num_images * 20  # Assuming 20 batches/month
-        }
         
     def _track_usage(self, cost: float):
         """
