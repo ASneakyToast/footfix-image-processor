@@ -60,6 +60,9 @@ class UnifiedProcessingWidget(QWidget):
         self.batch_processor.set_memory_limit(memory_limit)
         self.batch_processor.set_memory_optimization(True)
         
+        # Configure tag manager for batch processing
+        self.batch_processor.set_tag_manager(self.tag_manager)
+        
         # Load preferences
         self.load_preferences()
         
@@ -381,6 +384,10 @@ class UnifiedProcessingWidget(QWidget):
             self.enable_alt_text_cb.setToolTip(
                 "Configure Anthropic API key in Preferences → Alt Text to enable alt text generation"
             )
+        
+        # Also refresh AI tag availability since they can share the same API key
+        if hasattr(self, 'enable_ai_tags_cb'):
+            self.refresh_ai_tag_availability()
     
     def setup_tag_integration(self, main_layout):
         """Set up tag assignment integration."""
@@ -393,6 +400,14 @@ class UnifiedProcessingWidget(QWidget):
         )
         self.enable_tags_cb.toggled.connect(self.on_tags_toggled)
         tag_layout.addWidget(self.enable_tags_cb)
+        
+        # AI tagging toggle
+        self.enable_ai_tags_cb = QCheckBox("AI Tag Generation")
+        self.enable_ai_tags_cb.setToolTip(
+            "Enable automatic AI-powered tag generation based on image content"
+        )
+        self.enable_ai_tags_cb.toggled.connect(self.on_ai_tags_toggled)
+        tag_layout.addWidget(self.enable_ai_tags_cb)
         
         # Quick tag export button (only visible when tags are available)
         self.quick_tag_export_btn = QPushButton("Export Tags")
@@ -410,6 +425,7 @@ class UnifiedProcessingWidget(QWidget):
         
         # Check tag preferences
         self.refresh_tag_availability()
+        self.refresh_ai_tag_availability()
         
         # Tag widget for managing tags (hidden - handled by main window tab)
         self.tag_widget = TagWidget()
@@ -431,9 +447,56 @@ class UnifiedProcessingWidget(QWidget):
             "Enable tag assignment to images during processing"
         )
         
-        if tags_enabled:
+        self._update_tag_status_display()
+            
+    def refresh_ai_tag_availability(self):
+        """Refresh AI tag checkbox availability based on API key configuration."""
+        logger.info("Refreshing AI tag checkbox availability")
+        
+        # Check if we can share API key from alt text or have separate key
+        share_api_key = self.prefs_manager.get('tags.ai_share_api_key_with_alt_text', True)
+        
+        if share_api_key:
+            # Use alt text API key
+            api_key = self.prefs_manager.get('alt_text.api_key')
+        else:
+            # Use separate API key (if implemented in future)
+            api_key = self.prefs_manager.get('tags.ai_api_key')
+        
+        if api_key and api_key.strip():
+            logger.info("API key found - enabling AI tag checkbox")
+            self.enable_ai_tags_cb.setEnabled(True)
+            self.enable_ai_tags_cb.setToolTip(
+                "Enable automatic AI-powered tag generation based on image content"
+            )
+            # Check the checkbox if it was previously selected
+            ai_enabled_by_default = self.prefs_manager.get('tags.ai_generation_enabled', False)
+            if ai_enabled_by_default:
+                self.enable_ai_tags_cb.setChecked(True)
+        else:
+            logger.info("No API key found - disabling AI tag checkbox")
+            self.enable_ai_tags_cb.setEnabled(False)
+            self.enable_ai_tags_cb.setChecked(False)
+            self.enable_ai_tags_cb.setToolTip(
+                "Configure Anthropic API key in Preferences → Alt Text to enable AI tag generation"
+            )
+        
+        self._update_tag_status_display()
+    
+    def _update_tag_status_display(self):
+        """Update the tag status display based on current settings."""
+        tags_enabled = self.enable_tags_cb.isChecked()
+        ai_tags_enabled = self.enable_ai_tags_cb.isChecked() and self.enable_ai_tags_cb.isEnabled()
+        
+        if tags_enabled and ai_tags_enabled:
+            self.tag_status_label.setText("Tagging + AI enabled")
+            self.tag_status_label.setStyleSheet("color: green; font-weight: bold;")
+        elif tags_enabled:
             self.tag_status_label.setText("Tagging enabled")
             self.tag_status_label.setStyleSheet("color: green;")
+        elif ai_tags_enabled:
+            self.tag_status_label.setText("AI tagging only")
+            self.tag_status_label.setStyleSheet("color: orange;")
         else:
             self.tag_status_label.setText("Tagging disabled")
             self.tag_status_label.setStyleSheet("color: #666;")
@@ -757,7 +820,8 @@ class UnifiedProcessingWidget(QWidget):
             preset_name,
             output_folder,
             generate_alt_text=self.enable_alt_text_cb.isChecked(),
-            enable_tagging=self.enable_tags_cb.isChecked()
+            enable_tagging=self.enable_tags_cb.isChecked(),
+            enable_ai_tagging=self.enable_ai_tags_cb.isChecked() and self.enable_ai_tags_cb.isEnabled()
         )
         
         self.processing_thread.progress_updated.connect(self.on_progress_updated)
@@ -1075,24 +1139,63 @@ class UnifiedProcessingWidget(QWidget):
     # Tag-related methods
     def on_tags_toggled(self, checked: bool):
         """Handle tag assignment toggle."""
+        # Update preferences
+        self.prefs_manager.set('tags.enabled', checked)
+        self.prefs_manager.save()
+        
+        self._update_tag_status_display()
+        
         if checked:
-            self.tag_status_label.setText("Tagging enabled")
-            self.tag_status_label.setStyleSheet("color: green;")
-            
-            # Update preferences
-            self.prefs_manager.set('tags.enabled', True)
-            self.prefs_manager.save()
-            
             logger.info("Tag assignment enabled")
         else:
-            self.tag_status_label.setText("Tagging disabled")
-            self.tag_status_label.setStyleSheet("color: #666;")
+            logger.info("Tag assignment disabled")
+    
+    def on_ai_tags_toggled(self, checked: bool):
+        """Handle AI tag generation toggle."""
+        if checked:
+            # Check API key again
+            share_api_key = self.prefs_manager.get('tags.ai_share_api_key_with_alt_text', True)
+            
+            if share_api_key:
+                api_key = self.prefs_manager.get('alt_text.api_key')
+            else:
+                api_key = self.prefs_manager.get('tags.ai_api_key')
+            
+            if not api_key:
+                self.enable_ai_tags_cb.setChecked(False)
+                QMessageBox.warning(
+                    self,
+                    "API Key Required",
+                    "Please configure your Anthropic API key in preferences to enable AI tag generation."
+                )
+                return
+                
+            # Configure tag manager with AI capabilities
+            success = self.tag_manager.enable_ai_generation(api_key)
+            if not success:
+                self.enable_ai_tags_cb.setChecked(False)
+                QMessageBox.warning(
+                    self,
+                    "AI Tag Generation Failed",
+                    "Failed to initialize AI tag generation. Please check your API key."
+                )
+                return
             
             # Update preferences
-            self.prefs_manager.set('tags.enabled', False)
+            self.prefs_manager.set('tags.ai_generation_enabled', True)
             self.prefs_manager.save()
             
-            logger.info("Tag assignment disabled")
+            logger.info("AI tag generation enabled")
+        else:
+            self.tag_manager.disable_ai_generation()
+            
+            # Update preferences
+            self.prefs_manager.set('tags.ai_generation_enabled', False)
+            self.prefs_manager.save()
+            
+            logger.info("AI tag generation disabled")
+            
+        self._update_tag_status_display()
     
     def on_tags_updated(self, updates: dict):
         """Handle tag updates from the tag widget."""
@@ -1121,7 +1224,6 @@ class UnifiedProcessingWidget(QWidget):
                     item.tag_status = result.status
                     item.tag_error = result.error_message
                     item.tag_application_time = result.application_time
-                    item.tag_categories = result.tag_categories
                     break
         
         # Refresh UI
@@ -1170,16 +1272,14 @@ class UnifiedProcessingWidget(QWidget):
                 writer = csv.writer(csvfile)
                 
                 # Write header
-                writer.writerow(['Filename', 'Tags', 'Tag Count', 'Categories', 'Status', 'Application Time'])
+                writer.writerow(['Filename', 'Tags', 'Tag Count', 'Status', 'Application Time'])
                 
                 # Write data
                 for item in tagged_items:
-                    categories_str = ', '.join(f"{cat}: {', '.join(tags)}" for cat, tags in item.tag_categories.items())
                     writer.writerow([
                         item.source_path.name,
                         ', '.join(item.tags),
                         len(item.tags),
-                        categories_str,
                         item.tag_status.value,
                         f"{item.tag_application_time:.2f}s"
                     ])

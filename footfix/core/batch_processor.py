@@ -52,7 +52,6 @@ class BatchItem:
     tag_status: TagStatus = TagStatus.PENDING
     tag_error: Optional[str] = None
     tag_application_time: float = 0.0
-    tag_categories: Dict[str, List[str]] = field(default_factory=dict)
     
     def __post_init__(self):
         """Initialize file size."""
@@ -104,6 +103,9 @@ class BatchProcessor:
         self.alt_text_generator: Optional[AltTextGenerator] = None
         self.enable_alt_text = False
         self.alt_text_context = "editorial image"  # Default context for alt text generation
+        
+        # Tag management settings
+        self.tag_manager: Optional[TagManager] = None
         
     def add_image(self, image_path: Path) -> bool:
         """
@@ -273,6 +275,16 @@ class BatchProcessor:
         """Set the context for alt text generation."""
         self.alt_text_context = context
         logger.info(f"Alt text context set to: {context}")
+    
+    def set_tag_manager(self, tag_manager: TagManager):
+        """
+        Set the tag manager for AI tag generation.
+        
+        Args:
+            tag_manager: Configured TagManager instance
+        """
+        self.tag_manager = tag_manager
+        logger.info("Tag manager configured for batch processing")
                 
     def process_batch(self, preset_name: str, output_folder: Path) -> Dict[str, Any]:
         """
@@ -435,7 +447,7 @@ class BatchProcessor:
                 
         return results
         
-    def process_batch_with_features(self, preset_name: str, output_folder: Path, generate_alt_text: bool = False, enable_tagging: bool = False) -> Dict[str, Any]:
+    def process_batch_with_features(self, preset_name: str, output_folder: Path, generate_alt_text: bool = False, enable_tagging: bool = False, enable_ai_tagging: bool = False) -> Dict[str, Any]:
         """
         Process all images in the queue with the specified preset and optional features.
         
@@ -444,6 +456,7 @@ class BatchProcessor:
             output_folder: Destination folder for processed images
             generate_alt_text: Whether to generate alt text descriptions
             enable_tagging: Whether to enable tag assignment
+            enable_ai_tagging: Whether to enable AI-powered tag generation
             
         Returns:
             Dict containing processing results and statistics
@@ -482,13 +495,60 @@ class BatchProcessor:
                 loop.close()
         
         # Handle tag assignment if enabled
-        if enable_tagging:
-            logger.info("Starting tag assignment phase")
+        if enable_tagging or enable_ai_tagging:
+            logger.info(f"Starting tag assignment phase (AI: {enable_ai_tagging})")
             
             try:
-                tag_results = self._assign_tags_batch()
+                # Check if we have alt text results to extract tags from
+                has_alt_text = generate_alt_text and any(
+                    item.alt_text_status.value == "completed" and item.alt_text
+                    for item in self.queue
+                )
                 
-                # Update results with tag statistics
+                if has_alt_text and self.tag_manager and self.tag_manager.semantic_extraction_enabled:
+                    # Cost-efficient approach: extract tags from existing alt text using semantic analysis
+                    logger.info("Using cost-efficient semantic tag extraction from alt text")
+                    tag_results = self._extract_tags_from_alt_text_batch()
+                    
+                    # Update results with semantic extraction statistics
+                    results['semantic_tags_extracted'] = sum(
+                        1 for item in self.queue 
+                        if item.tag_status == TagStatus.COMPLETED and item.tags
+                    )
+                    results['semantic_tags_failed'] = sum(
+                        1 for item in self.queue 
+                        if item.tag_status == TagStatus.ERROR
+                    )
+                    
+                elif enable_ai_tagging:
+                    # Direct AI tag generation (more expensive)
+                    logger.info("Using direct AI tag generation")
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
+                    try:
+                        ai_tag_results = loop.run_until_complete(
+                            self._generate_ai_tags_batch()
+                        )
+                    finally:
+                        loop.close()
+                        
+                    # Update results with AI tag statistics
+                    results['ai_tags_generated'] = sum(
+                        1 for item in self.queue 
+                        if item.tag_status == TagStatus.COMPLETED and item.tags
+                    )
+                    results['ai_tags_failed'] = sum(
+                        1 for item in self.queue 
+                        if item.tag_status == TagStatus.ERROR
+                    )
+                    
+                elif enable_tagging:
+                    # Use pattern-based tagging as fallback
+                    logger.info("Using pattern-based tag assignment")
+                    tag_results = self._assign_tags_batch()
+                
+                # Update results with overall tag statistics
                 results['tags_assigned'] = sum(
                     1 for item in self.queue 
                     if item.tag_status == TagStatus.COMPLETED and item.tags
@@ -548,22 +608,6 @@ class BatchProcessor:
                     item.tag_status = TagStatus.COMPLETED
                     item.tag_application_time = 0.1  # Minimal processing time for simple assignment
                     
-                    # Organize tags by category
-                    item.tag_categories = {}
-                    for tag in assigned_tags:
-                        # Simple category assignment
-                        if tag in ['person', 'people', 'landscape', 'object', 'food', 'technology']:
-                            if 'Content' not in item.tag_categories:
-                                item.tag_categories['Content'] = []
-                            item.tag_categories['Content'].append(tag)
-                        elif tag in ['portrait', 'wide-shot', 'close-up']:
-                            if 'Style' not in item.tag_categories:
-                                item.tag_categories['Style'] = []
-                            item.tag_categories['Style'].append(tag)
-                        elif tag in ['article', 'thumbnail', 'social-media']:
-                            if 'Usage' not in item.tag_categories:
-                                item.tag_categories['Usage'] = []
-                            item.tag_categories['Usage'].append(tag)
                     
                     logger.debug(f"Assigned tags {assigned_tags} to {item.source_path.name}")
                     
@@ -614,6 +658,109 @@ class BatchProcessor:
             logger.error(f"Alt text generation failed for {item.source_path.name}: {e}")
             item.alt_text_status = AltTextStatus.ERROR
             item.alt_text_error = str(e)
+    
+    async def _generate_ai_tags_batch(self):
+        """Generate AI tags for all processed images in the queue."""
+        if not hasattr(self, 'tag_manager') or not self.tag_manager:
+            logger.error("Tag manager not available for AI tag generation")
+            return
+            
+        if not self.tag_manager.ai_generation_enabled:
+            logger.error("AI tag generation not enabled in tag manager")
+            return
+            
+        tasks = []
+        
+        for index, item in enumerate(self.queue):
+            # Only generate tags for successfully processed images
+            if item.status == ProcessingStatus.COMPLETED and item.output_path:
+                # Update progress
+                self.progress.current_item_name = f"AI tags: {item.source_path.name}"
+                self._notify_progress()
+                
+                # Create async task
+                task = self._generate_ai_tags_for_item(item)
+                tasks.append(task)
+                
+        # Wait for all tasks to complete with rate limiting
+        if tasks:
+            # Process in smaller batches to respect rate limits
+            batch_size = 5
+            for i in range(0, len(tasks), batch_size):
+                batch_tasks = tasks[i:i + batch_size]
+                await asyncio.gather(*batch_tasks, return_exceptions=True)
+                
+                # Small delay between batches
+                if i + batch_size < len(tasks):
+                    await asyncio.sleep(1)
+                    
+    async def _generate_ai_tags_for_item(self, item: BatchItem):
+        """Generate AI tags for a single item."""
+        try:
+            start_time = time.time()
+            
+            # Use the tag manager's AI generation
+            result = await self.tag_manager.generate_ai_tags(
+                item.output_path,  # Use processed image for better quality
+                context=getattr(self, 'alt_text_context', 'editorial image')
+            )
+            
+            # Update item with results
+            if result.status == TagStatus.COMPLETED:
+                item.tags = result.tags
+                item.tag_status = TagStatus.COMPLETED
+                item.tag_application_time = time.time() - start_time
+                logger.info(f"AI generated {len(result.tags)} tags for {item.source_path.name}")
+            else:
+                item.tag_status = TagStatus.ERROR
+                item.tag_error = result.error_message
+                logger.warning(f"AI tag generation failed for {item.source_path.name}: {result.error_message}")
+            
+            # Notify callbacks
+            self._notify_item_complete(item)
+            
+        except Exception as e:
+            logger.error(f"AI tag generation failed for {item.source_path.name}: {e}")
+            item.tag_status = TagStatus.ERROR
+            item.tag_error = str(e)
+    
+    def _extract_tags_from_alt_text_batch(self):
+        """Extract tags from alt text for all processed images in the queue."""
+        if not self.tag_manager:
+            logger.error("Tag manager not available for alt text tag extraction")
+            return
+            
+        for item in self.queue:
+            if (item.status == ProcessingStatus.COMPLETED and 
+                item.alt_text_status.value == "completed" and 
+                item.alt_text):
+                
+                try:
+                    # Update progress
+                    self.progress.current_item_name = f"Extracting tags: {item.source_path.name}"
+                    self._notify_progress()
+                    
+                    # Extract tags from alt text
+                    result = self.tag_manager.extract_tags_from_alt_text(item.alt_text)
+                    
+                    # Update item with results
+                    item.tags = result.tags
+                    item.tag_status = result.status
+                    item.tag_error = result.error_message
+                    item.tag_application_time = result.application_time
+                    
+                    if result.status == TagStatus.COMPLETED:
+                        logger.debug(f"Extracted {len(result.tags)} tags from alt text for {item.source_path.name}")
+                    else:
+                        logger.warning(f"Alt text tag extraction failed for {item.source_path.name}: {result.error_message}")
+                        
+                    # Notify callbacks
+                    self._notify_item_complete(item)
+                    
+                except Exception as e:
+                    item.tag_status = TagStatus.ERROR
+                    item.tag_error = f"Alt text tag extraction failed: {str(e)}"
+                    logger.error(f"Failed to extract tags from alt text for {item.source_path.name}: {e}")
         
     def cancel_processing(self):
         """Cancel the current batch processing operation."""

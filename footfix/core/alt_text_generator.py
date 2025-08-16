@@ -87,20 +87,39 @@ class AltTextGenerator:
         except:
             self._prefs_manager = None
         
-        # Editorial content prompt optimization
-        self.system_prompt = """You are an expert at writing alt text descriptions for editorial images. 
+        # Editorial content prompt optimization - enhanced for tag extraction
+        self.system_prompt = """You are an expert at writing comprehensive alt text descriptions for editorial images. 
 Your descriptions should be:
-- Concise yet informative (50-150 words)
-- Focused on the main subject and context
-- Descriptive of visual elements important for understanding
+- Comprehensive and detailed (100-200 words)
+- Rich in descriptive keywords for content, style, composition, and context
+- Focused on the main subject while including relevant secondary elements
 - Professional and appropriate for publication
 - Avoiding redundant phrases like "image of" or "picture showing"
 
-For editorial content, emphasize:
-- People: their appearance, expressions, clothing, and actions
-- Settings: location, atmosphere, and relevant background elements
-- Products: key features, styling, and presentation
-- Composition: how elements are arranged and what draws attention"""
+For editorial content, provide detailed coverage of:
+
+CONTENT ELEMENTS:
+- People: describe individuals (person, people, man, woman, child), their appearance, expressions, clothing, age, and actions
+- Objects: identify buildings, architecture, technology, food, products, tools, or other significant items
+- Environment: specify landscape, nature, indoor/outdoor settings, urban/rural context
+
+VISUAL STYLE:
+- Shot type: portrait, close-up, wide shot, full body, environmental shot
+- Composition: centered, off-center, rule of thirds, symmetrical, dynamic
+- Lighting: natural, artificial, dramatic, soft, harsh, golden hour, studio lighting
+- Color palette: vibrant, muted, monochrome, black and white, colorful, saturated
+
+TECHNICAL ASPECTS:
+- Photography style: professional, candid, posed, documentary, artistic, commercial
+- Mood: serious, cheerful, dramatic, peaceful, energetic, contemplative
+- Quality indicators: high-resolution, sharp focus, shallow depth of field
+
+CONTEXT CLUES:
+- Usage intent: appears suitable for news, feature article, social media, marketing, print publication
+- Editorial category: breaking news, feature story, opinion piece, review, interview, analysis
+- Setting formality: casual, professional, formal, intimate, public, private
+
+Write naturally while ensuring these descriptive elements are woven throughout the description."""
         
     def set_api_key(self, api_key: str):
         """Set or update the API key."""
@@ -376,17 +395,20 @@ For editorial content, emphasize:
         return results
         
         
-    def _track_usage(self, cost: float):
+    def _track_usage(self, cost: Optional[float]):
         """
         Track API usage and costs.
         
         Args:
-            cost: Cost of the API request
+            cost: Cost of the API request (can be None)
         """
         if not self._prefs_manager or not self._prefs_manager.get('alt_text.enable_cost_tracking', True):
             return
             
         try:
+            # Handle None cost
+            cost = cost or 0.0
+            
             # Get current stats
             stats = self._prefs_manager.get('alt_text.usage_stats', {})
             if not stats:

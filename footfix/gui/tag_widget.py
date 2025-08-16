@@ -13,8 +13,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QLineEdit, QPushButton, QLabel,
     QHeaderView, QGroupBox, QCheckBox, QMessageBox,
     QProgressBar, QSplitter, QAbstractItemView, QMenu,
-    QFileDialog, QCompleter, QFrame,
-    QComboBox, QColorDialog, QTextEdit, QScrollArea
+    QFileDialog, QCompleter
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QStringListModel
 from PySide6.QtGui import QPixmap, QColor, QAction, QPalette
@@ -108,107 +107,6 @@ class TagEditWidget(QLineEdit):
         self._setup_autocompleter()
 
 
-class TagCategoryWidget(QFrame):
-    """Widget for managing a single tag category."""
-    
-    category_changed = Signal(str, dict)  # category_name, category_data
-    category_deleted = Signal(str)  # category_name
-    
-    def __init__(self, category_name: str, category_data: Dict[str, Any], parent=None):
-        super().__init__(parent)
-        self.category_name = category_name
-        self.category_data = category_data
-        
-        self.setFrameStyle(QFrame.Box)
-        self.setStyleSheet(f"QFrame {{ border: 2px solid {category_data.get('color', '#007AFF')}; border-radius: 5px; padding: 5px; }}")
-        
-        self.setup_ui()
-        
-    def setup_ui(self):
-        """Set up the category widget UI."""
-        layout = QVBoxLayout(self)
-        
-        # Header with name and color
-        header_layout = QHBoxLayout()
-        
-        self.name_edit = QLineEdit(self.category_name)
-        self.name_edit.textChanged.connect(self._on_category_changed)
-        header_layout.addWidget(self.name_edit)
-        
-        self.color_btn = QPushButton()
-        self.color_btn.setFixedSize(30, 30)
-        self.color_btn.setStyleSheet(f"background-color: {self.category_data.get('color', '#007AFF')}; border: 1px solid #ccc;")
-        self.color_btn.clicked.connect(self._choose_color)
-        header_layout.addWidget(self.color_btn)
-        
-        self.delete_btn = QPushButton("×")
-        self.delete_btn.setFixedSize(30, 30)
-        self.delete_btn.setStyleSheet("QPushButton { color: red; font-weight: bold; }")
-        self.delete_btn.clicked.connect(lambda: self.category_deleted.emit(self.category_name))
-        header_layout.addWidget(self.delete_btn)
-        
-        layout.addLayout(header_layout)
-        
-        # Description
-        self.description_edit = QLineEdit(self.category_data.get('description', ''))
-        self.description_edit.setPlaceholderText("Category description...")
-        self.description_edit.textChanged.connect(self._on_category_changed)
-        layout.addWidget(self.description_edit)
-        
-        # Options
-        options_layout = QHBoxLayout()
-        
-        self.required_cb = QCheckBox("Required")
-        self.required_cb.setChecked(self.category_data.get('required', False))
-        self.required_cb.toggled.connect(self._on_category_changed)
-        options_layout.addWidget(self.required_cb)
-        
-        self.allow_custom_cb = QCheckBox("Allow Custom")
-        self.allow_custom_cb.setChecked(self.category_data.get('allow_custom', True))
-        self.allow_custom_cb.toggled.connect(self._on_category_changed)
-        options_layout.addWidget(self.allow_custom_cb)
-        
-        layout.addLayout(options_layout)
-        
-        # Predefined tags
-        self.tags_edit = QTextEdit()
-        self.tags_edit.setMaximumHeight(60)
-        self.tags_edit.setPlaceholderText("Predefined tags (comma-separated)...")
-        current_tags = ', '.join(self.category_data.get('predefined_tags', []))
-        self.tags_edit.setPlainText(current_tags)
-        self.tags_edit.textChanged.connect(self._on_category_changed)
-        layout.addWidget(self.tags_edit)
-        
-    def _choose_color(self):
-        """Open color picker for category color."""
-        current_color = QColor(self.category_data.get('color', '#007AFF'))
-        color = QColorDialog.getColor(current_color, self, "Choose Category Color")
-        
-        if color.isValid():
-            color_hex = color.name()
-            self.category_data['color'] = color_hex
-            self.color_btn.setStyleSheet(f"background-color: {color_hex}; border: 1px solid #ccc;")
-            self.setStyleSheet(f"QFrame {{ border: 2px solid {color_hex}; border-radius: 5px; padding: 5px; }}")
-            self._on_category_changed()
-    
-    def _on_category_changed(self):
-        """Handle changes to category settings."""
-        # Update category data
-        self.category_data.update({
-            'description': self.description_edit.text(),
-            'required': self.required_cb.isChecked(),
-            'allow_custom': self.allow_custom_cb.isChecked(),
-            'predefined_tags': [tag.strip() for tag in self.tags_edit.toPlainText().split(',') if tag.strip()]
-        })
-        
-        # Update category name if changed
-        new_name = self.name_edit.text().strip()
-        if new_name and new_name != self.category_name:
-            old_name = self.category_name
-            self.category_name = new_name
-            
-        self.category_changed.emit(self.category_name, self.category_data)
-
 
 class TagWidget(QWidget):
     """Main widget for reviewing and editing image tags."""
@@ -236,21 +134,6 @@ class TagWidget(QWidget):
         self.tag_manager.auto_suggest = tag_prefs.get('auto_suggest', True)
         self.tag_manager.max_tags_per_image = tag_prefs.get('max_tags_per_image', 10)
         self.tag_manager.require_tags = tag_prefs.get('require_tags', False)
-        
-        # Load categories
-        default_categories = tag_prefs.get('default_categories', {})
-        if default_categories:
-            for cat_name, cat_data in default_categories.items():
-                category = TagCategory(
-                    name=cat_name,
-                    color=cat_data.get('color', '#007AFF'),
-                    description=cat_data.get('description', ''),
-                    required=cat_data.get('required', False),
-                    max_tags=cat_data.get('max_tags'),
-                    predefined_tags=cat_data.get('predefined_tags', []),
-                    allow_custom=cat_data.get('allow_custom', True)
-                )
-                self.tag_manager.add_category(category)
         
     def setup_ui(self):
         """Set up the user interface."""
@@ -333,122 +216,12 @@ class TagWidget(QWidget):
         
         splitter.addWidget(left_widget)
         
-        # Right side - Category management
-        right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
-        
-        right_layout.addWidget(QLabel("Tag Categories"))
-        
-        # Add category button
-        add_category_btn = QPushButton("Add New Category")
-        add_category_btn.clicked.connect(self._add_new_category)
-        right_layout.addWidget(add_category_btn)
-        
-        # Categories scroll area
-        self.categories_scroll = QScrollArea()
-        self.categories_widget = QWidget()
-        self.categories_layout = QVBoxLayout(self.categories_widget)
-        self.categories_scroll.setWidget(self.categories_widget)
-        self.categories_scroll.setWidgetResizable(True)
-        right_layout.addWidget(self.categories_scroll)
-        
-        splitter.addWidget(right_widget)
-        splitter.setSizes([600, 400])
+        splitter.setSizes([1000])
         
         # Status bar
         self.status_label = QLabel("No images loaded")
         layout.addWidget(self.status_label)
         
-        # Load existing categories
-        self._refresh_categories()
-        
-    def _refresh_categories(self):
-        """Refresh the category management interface."""
-        # Clear existing category widgets
-        while self.categories_layout.count():
-            child = self.categories_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-        
-        # Add category widgets
-        for cat_name, category in self.tag_manager.categories.items():
-            cat_data = {
-                'color': category.color,
-                'description': category.description,
-                'required': category.required,
-                'max_tags': category.max_tags,
-                'predefined_tags': category.predefined_tags,
-                'allow_custom': category.allow_custom
-            }
-            
-            cat_widget = TagCategoryWidget(cat_name, cat_data)
-            cat_widget.category_changed.connect(self._on_category_changed)
-            cat_widget.category_deleted.connect(self._on_category_deleted)
-            self.categories_layout.addWidget(cat_widget)
-        
-        self.categories_layout.addStretch()
-        
-        # Update tag input autocomplete
-        self.tag_input.update_available_tags(self.tag_manager.get_all_tags())
-        
-    def _add_new_category(self):
-        """Add a new tag category."""
-        category_name = f"Category_{len(self.tag_manager.categories) + 1}"
-        category = TagCategory(
-            name=category_name,
-            color='#007AFF',
-            description='New category',
-            predefined_tags=[]
-        )
-        
-        self.tag_manager.add_category(category)
-        self._refresh_categories()
-        self._save_categories_to_preferences()
-        
-    def _on_category_changed(self, cat_name: str, cat_data: Dict[str, Any]):
-        """Handle category changes."""
-        if cat_name in self.tag_manager.categories:
-            # Update existing category
-            category = self.tag_manager.categories[cat_name]
-            category.color = cat_data.get('color', category.color)
-            category.description = cat_data.get('description', category.description)
-            category.required = cat_data.get('required', category.required)
-            category.max_tags = cat_data.get('max_tags', category.max_tags)
-            category.predefined_tags = cat_data.get('predefined_tags', category.predefined_tags)
-            category.allow_custom = cat_data.get('allow_custom', category.allow_custom)
-        
-        self._save_categories_to_preferences()
-        self.tag_input.update_available_tags(self.tag_manager.get_all_tags())
-        
-    def _on_category_deleted(self, cat_name: str):
-        """Handle category deletion."""
-        reply = QMessageBox.question(
-            self,
-            "Delete Category",
-            f"Are you sure you want to delete the '{cat_name}' category?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        
-        if reply == QMessageBox.Yes:
-            self.tag_manager.remove_category(cat_name)
-            self._refresh_categories()
-            self._save_categories_to_preferences()
-    
-    def _save_categories_to_preferences(self):
-        """Save current categories to preferences."""
-        categories_data = {}
-        for cat_name, category in self.tag_manager.categories.items():
-            categories_data[cat_name] = {
-                'color': category.color,
-                'description': category.description,
-                'required': category.required,
-                'max_tags': category.max_tags,
-                'predefined_tags': category.predefined_tags,
-                'allow_custom': category.allow_custom
-            }
-        
-        self.prefs_manager.set('tags.default_categories', categories_data)
-        self.prefs_manager.save()
     
     def set_batch_items(self, items: List[BatchItem]):
         """Set the batch items to display."""
@@ -497,8 +270,13 @@ class TagWidget(QWidget):
                 
             self.images_table.setItem(row, 2, status_item)
             
-            # Tags
-            tags_text = ', '.join(item.tags) if item.tags else "No tags"
+            # Tags - ensure proper string conversion
+            if item.tags:
+                # Convert each tag to string and filter out any None values
+                tag_strings = [str(tag) for tag in item.tags if tag is not None]
+                tags_text = ', '.join(tag_strings) if tag_strings else "No tags"
+            else:
+                tags_text = "No tags"
             self.images_table.setItem(row, 3, QTableWidgetItem(tags_text))
         
         # Update status
