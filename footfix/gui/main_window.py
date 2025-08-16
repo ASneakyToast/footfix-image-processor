@@ -22,6 +22,7 @@ from ..utils.preferences import PreferencesManager
 from ..utils.notifications import NotificationManager
 from .unified_widget import UnifiedProcessingWidget
 from .alt_text_widget import AltTextWidget
+from .tag_widget import TagWidget
 from .preview_widget import PreviewWidget
 from .settings_dialog import AdvancedSettingsDialog
 from .menu_bar import MenuBarManager
@@ -93,6 +94,12 @@ class MainWindow(QMainWindow):
         self.alt_text_widget.alt_text_updated.connect(self.on_alt_text_updated)
         self.alt_text_widget.regenerate_requested.connect(self.on_regenerate_requested)
         self.tab_widget.addTab(self.alt_text_widget, "Alt Text Review")
+        
+        # Tag Management tab
+        self.tag_widget = TagWidget()
+        self.tag_widget.tag_updated.connect(self.on_tags_updated)
+        self.tag_widget.tag_assignment_requested.connect(self.on_tag_assignment_requested)
+        self.tab_widget.addTab(self.tag_widget, "Tag Management")
         
         # Status/Log area
         log_group = QGroupBox("Status")
@@ -210,6 +217,8 @@ class MainWindow(QMainWindow):
         logger.info(f"Batch processing completed: {results}")
         # Update alt text widget with latest batch data
         self.alt_text_widget.set_batch_items(self.unified_widget.batch_processor.queue)
+        # Update tag widget with latest batch data
+        self.tag_widget.set_batch_items(self.unified_widget.batch_processor.queue)
         
     def on_alt_text_updated(self, updates: dict):
         """Handle alt text updates from the review tab."""
@@ -225,6 +234,18 @@ class MainWindow(QMainWindow):
         """Handle queue changes to keep alt text tab updated."""
         # Update alt text widget with current batch data
         self.alt_text_widget.set_batch_items(self.unified_widget.batch_processor.queue)
+        # Update tag widget with current batch data
+        self.tag_widget.set_batch_items(self.unified_widget.batch_processor.queue)
+        
+    def on_tags_updated(self, updates: dict):
+        """Handle tag updates from the tag management tab."""
+        # Forward updates to the unified widget
+        self.unified_widget.on_tags_updated(updates)
+        
+    def on_tag_assignment_requested(self, tags: list, filenames: list):
+        """Handle tag assignment requests from the tag management tab."""
+        # Forward to the unified widget for processing
+        self.unified_widget.on_tag_assignment_requested(tags, filenames)
         
     def show_preview(self):
         """Show the preview window for the current image and preset."""

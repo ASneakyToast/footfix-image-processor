@@ -19,6 +19,7 @@ from PySide6.QtGui import QIcon
 
 from ..core.batch_processor import BatchProcessor, BatchItem, BatchProgress, ProcessingStatus
 from ..core.alt_text_generator import AltTextStatus
+from ..core.tag_manager import TagStatus
 from ..utils.notifications import NotificationManager
 from ..utils.preferences import PreferencesManager
 from ..utils.alt_text_exporter import AltTextExporter, ExportFormat, ExportOptions
@@ -37,12 +38,13 @@ class BatchProcessingThread(QThread):
     status_message = Signal(str)
     alt_text_progress = Signal(int, int, str)  # current, total, message
     
-    def __init__(self, batch_processor: BatchProcessor, preset_name: str, output_folder: Path, generate_alt_text: bool = False):
+    def __init__(self, batch_processor: BatchProcessor, preset_name: str, output_folder: Path, generate_alt_text: bool = False, enable_tagging: bool = False):
         super().__init__()
         self.batch_processor = batch_processor
         self.preset_name = preset_name
         self.output_folder = output_folder
         self.generate_alt_text = generate_alt_text
+        self.enable_tagging = enable_tagging
         self._is_cancelled = False
         
     def run(self):
@@ -55,10 +57,28 @@ class BatchProcessingThread(QThread):
             # Start processing
             self.status_message.emit(f"Starting batch processing with {self.preset_name} preset...")
             
-            # Use appropriate processing method based on alt text setting
-            if self.generate_alt_text:
+            # Use appropriate processing method based on features enabled
+            if self.generate_alt_text and self.enable_tagging:
+                # Both alt text and tagging enabled
+                results = self.batch_processor.process_batch_with_features(
+                    self.preset_name, 
+                    self.output_folder,
+                    generate_alt_text=True,
+                    enable_tagging=True
+                )
+            elif self.generate_alt_text:
+                # Only alt text enabled
                 results = self.batch_processor.process_batch_with_alt_text(self.preset_name, self.output_folder)
+            elif self.enable_tagging:
+                # Only tagging enabled
+                results = self.batch_processor.process_batch_with_features(
+                    self.preset_name,
+                    self.output_folder,
+                    generate_alt_text=False,
+                    enable_tagging=True
+                )
             else:
+                # Neither enabled - standard processing
                 results = self.batch_processor.process_batch(self.preset_name, self.output_folder)
             
             # Emit completion

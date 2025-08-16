@@ -66,6 +66,46 @@ class PreferencesManager(QObject):
             'default_context': 'editorial image',
             'max_concurrent_requests': 5,
             'enable_cost_tracking': True,
+        },
+        'tags': {
+            'enabled': True,
+            'auto_suggest': True,
+            'max_tags_per_image': 10,
+            'require_tags': False,
+            'default_categories': {
+                'Content': {
+                    'color': '#28a745',
+                    'description': 'Describes what is in the image',
+                    'required': False,
+                    'max_tags': None,
+                    'predefined_tags': ['person', 'people', 'building', 'landscape', 'object', 'food', 'technology'],
+                    'allow_custom': True
+                },
+                'Style': {
+                    'color': '#ffc107',
+                    'description': 'Visual style and composition',
+                    'required': False,
+                    'max_tags': None,
+                    'predefined_tags': ['portrait', 'wide-shot', 'close-up', 'black-white', 'color', 'vintage', 'modern'],
+                    'allow_custom': True
+                },
+                'Usage': {
+                    'color': '#17a2b8',
+                    'description': 'Intended use or context',
+                    'required': False,
+                    'max_tags': None,
+                    'predefined_tags': ['hero-image', 'thumbnail', 'gallery', 'article', 'social-media', 'print'],
+                    'allow_custom': True
+                },
+                'Editorial': {
+                    'color': '#dc3545',
+                    'description': 'Editorial context and classification',
+                    'required': False,
+                    'max_tags': None,
+                    'predefined_tags': ['news', 'feature', 'opinion', 'review', 'interview', 'breaking', 'analysis'],
+                    'allow_custom': True
+                }
+            }
         }
     }
     

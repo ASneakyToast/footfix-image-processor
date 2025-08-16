@@ -20,6 +20,7 @@ from PySide6.QtGui import QIcon, QDragEnterEvent, QDropEvent, QFont
 
 from ..core.batch_processor import BatchProcessor, BatchItem, BatchProgress, ProcessingStatus
 from ..core.alt_text_generator import AltTextStatus
+from ..core.tag_manager import TagStatus, TagManager
 from ..core.processor import ImageProcessor
 from ..presets.profiles import PRESET_REGISTRY, get_preset, PresetConfig
 from ..utils.notifications import NotificationManager
@@ -28,6 +29,7 @@ from ..utils.filename_template import FilenameTemplate
 from ..utils.alt_text_exporter import AltTextExporter, ExportFormat, ExportOptions
 from .batch_widget import BatchProcessingThread
 from .alt_text_widget import AltTextWidget
+from .tag_widget import TagWidget
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,7 @@ class UnifiedProcessingWidget(QWidget):
         self.notification_manager = NotificationManager()
         self.prefs_manager = PreferencesManager.get_instance()
         self.filename_template = FilenameTemplate()
+        self.tag_manager = TagManager()
         
         # Apply memory optimization settings from preferences
         memory_limit = self.prefs_manager.get('advanced.memory_limit_mb', 2048)
@@ -85,6 +88,9 @@ class UnifiedProcessingWidget(QWidget):
         
         # Alt Text Integration
         self.setup_alt_text_integration(main_layout)
+        
+        # Tag Integration
+        self.setup_tag_integration(main_layout)
         
         # Enable drag and drop
         self.setAcceptDrops(True)
@@ -375,6 +381,62 @@ class UnifiedProcessingWidget(QWidget):
             self.enable_alt_text_cb.setToolTip(
                 "Configure Anthropic API key in Preferences → Alt Text to enable alt text generation"
             )
+    
+    def setup_tag_integration(self, main_layout):
+        """Set up tag assignment integration."""
+        # Tag options
+        tag_layout = QHBoxLayout()
+        
+        self.enable_tags_cb = QCheckBox("Enable Tagging")
+        self.enable_tags_cb.setToolTip(
+            "Enable tag assignment to images during processing"
+        )
+        self.enable_tags_cb.toggled.connect(self.on_tags_toggled)
+        tag_layout.addWidget(self.enable_tags_cb)
+        
+        # Quick tag export button (only visible when tags are available)
+        self.quick_tag_export_btn = QPushButton("Export Tags")
+        self.quick_tag_export_btn.setToolTip("Quick export tag data to CSV")
+        self.quick_tag_export_btn.clicked.connect(self.quick_export_tags)
+        self.quick_tag_export_btn.setVisible(False)
+        tag_layout.addWidget(self.quick_tag_export_btn)
+        
+        tag_layout.addStretch()
+        
+        self.tag_status_label = QLabel("")
+        tag_layout.addWidget(self.tag_status_label)
+        
+        main_layout.addLayout(tag_layout)
+        
+        # Check tag preferences
+        self.refresh_tag_availability()
+        
+        # Tag widget for managing tags (hidden - handled by main window tab)
+        self.tag_widget = TagWidget()
+        self.tag_widget.tag_updated.connect(self.on_tags_updated)
+        self.tag_widget.tag_assignment_requested.connect(self.on_tag_assignment_requested)
+        self.tag_widget.setVisible(False)  # Hidden - managed by dedicated tab
+        main_layout.addWidget(self.tag_widget)
+    
+    def refresh_tag_availability(self):
+        """Refresh tag checkbox availability based on preferences."""
+        logger.info("Refreshing tag checkbox availability")
+        
+        # Tags are always available (no API key required)
+        tags_enabled = self.prefs_manager.get('tags.enabled', True)
+        
+        self.enable_tags_cb.setEnabled(True)
+        self.enable_tags_cb.setChecked(tags_enabled)
+        self.enable_tags_cb.setToolTip(
+            "Enable tag assignment to images during processing"
+        )
+        
+        if tags_enabled:
+            self.tag_status_label.setText("Tagging enabled")
+            self.tag_status_label.setStyleSheet("color: green;")
+        else:
+            self.tag_status_label.setText("Tagging disabled")
+            self.tag_status_label.setStyleSheet("color: #666;")
             
     def load_preferences(self):
         """Load preferences from the preferences manager."""
@@ -694,7 +756,8 @@ class UnifiedProcessingWidget(QWidget):
             self.batch_processor,
             preset_name,
             output_folder,
-            generate_alt_text=self.enable_alt_text_cb.isChecked()
+            generate_alt_text=self.enable_alt_text_cb.isChecked(),
+            enable_tagging=self.enable_tags_cb.isChecked()
         )
         
         self.processing_thread.progress_updated.connect(self.on_progress_updated)
@@ -1007,4 +1070,133 @@ class UnifiedProcessingWidget(QWidget):
                 self,
                 "Export Failed",
                 message
+            )
+            
+    # Tag-related methods
+    def on_tags_toggled(self, checked: bool):
+        """Handle tag assignment toggle."""
+        if checked:
+            self.tag_status_label.setText("Tagging enabled")
+            self.tag_status_label.setStyleSheet("color: green;")
+            
+            # Update preferences
+            self.prefs_manager.set('tags.enabled', True)
+            self.prefs_manager.save()
+            
+            logger.info("Tag assignment enabled")
+        else:
+            self.tag_status_label.setText("Tagging disabled")
+            self.tag_status_label.setStyleSheet("color: #666;")
+            
+            # Update preferences
+            self.prefs_manager.set('tags.enabled', False)
+            self.prefs_manager.save()
+            
+            logger.info("Tag assignment disabled")
+    
+    def on_tags_updated(self, updates: dict):
+        """Handle tag updates from the tag widget."""
+        # Update batch processor items
+        for filename, tags in updates.items():
+            for item in self.batch_processor.queue:
+                if item.source_path.name == filename:
+                    item.tags = tags
+                    item.tag_status = TagStatus.COMPLETED if tags else TagStatus.PENDING
+                    break
+        
+        # Refresh UI
+        self.update_queue_display()
+        logger.info(f"Updated tags for {len(updates)} items")
+    
+    def on_tag_assignment_requested(self, tags: List[str], filenames: List[str]):
+        """Handle tag assignment requests from the tag widget."""
+        # Apply tags to specified items
+        for filename in filenames:
+            for item in self.batch_processor.queue:
+                if item.source_path.name == filename:
+                    # Use tag manager to validate and apply tags
+                    result = self.tag_manager.apply_tags(tags, filename)
+                    
+                    item.tags = result.tags
+                    item.tag_status = result.status
+                    item.tag_error = result.error_message
+                    item.tag_application_time = result.application_time
+                    item.tag_categories = result.tag_categories
+                    break
+        
+        # Refresh UI
+        self.update_queue_display()
+        logger.info(f"Applied tags {tags} to {len(filenames)} items")
+    
+    def quick_export_tags(self):
+        """Quick export tag data to CSV."""
+        # Check if we have any tagged items
+        tagged_items = [
+            item for item in self.batch_processor.queue
+            if item.tag_status == TagStatus.COMPLETED and item.tags
+        ]
+        
+        if not tagged_items:
+            QMessageBox.information(
+                self,
+                "No Data to Export",
+                "No tagged items to export."
+            )
+            return
+        
+        # Generate default filename with timestamp
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_filename = f"tags_export_{timestamp}.csv"
+        
+        # Get save location
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Tag Data",
+            str(Path.home() / "Downloads" / default_filename),
+            "CSV Files (*.csv)"
+        )
+        
+        if not output_path:
+            return
+            
+        output_path = Path(output_path)
+        
+        try:
+            # Simple CSV export for tags
+            import csv
+            
+            with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                
+                # Write header
+                writer.writerow(['Filename', 'Tags', 'Tag Count', 'Categories', 'Status', 'Application Time'])
+                
+                # Write data
+                for item in tagged_items:
+                    categories_str = ', '.join(f"{cat}: {', '.join(tags)}" for cat, tags in item.tag_categories.items())
+                    writer.writerow([
+                        item.source_path.name,
+                        ', '.join(item.tags),
+                        len(item.tags),
+                        categories_str,
+                        item.tag_status.value,
+                        f"{item.tag_application_time:.2f}s"
+                    ])
+            
+            QMessageBox.information(
+                self,
+                "Export Complete",
+                f"Tag data exported to:\n{output_path.name}"
+            )
+            
+            # Open in finder
+            import subprocess
+            subprocess.run(["open", "-R", str(output_path)])
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Export Failed",
+                f"Failed to export tag data:\n{str(e)}"
             )

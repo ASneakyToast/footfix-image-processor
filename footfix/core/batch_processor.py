@@ -18,6 +18,7 @@ import asyncio
 from .processor import ImageProcessor
 from ..presets.profiles import PresetProfile, get_preset
 from .alt_text_generator import AltTextStatus, AltTextGenerator
+from .tag_manager import TagStatus, TagManager
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,13 @@ class BatchItem:
     alt_text_status: AltTextStatus = AltTextStatus.PENDING
     alt_text_error: Optional[str] = None
     alt_text_generation_time: float = 0.0
+    
+    # Tag fields
+    tags: List[str] = field(default_factory=list)
+    tag_status: TagStatus = TagStatus.PENDING
+    tag_error: Optional[str] = None
+    tag_application_time: float = 0.0
+    tag_categories: Dict[str, List[str]] = field(default_factory=dict)
     
     def __post_init__(self):
         """Initialize file size."""
@@ -427,6 +435,143 @@ class BatchProcessor:
                 
         return results
         
+    def process_batch_with_features(self, preset_name: str, output_folder: Path, generate_alt_text: bool = False, enable_tagging: bool = False) -> Dict[str, Any]:
+        """
+        Process all images in the queue with the specified preset and optional features.
+        
+        Args:
+            preset_name: Name of the preset to apply
+            output_folder: Destination folder for processed images
+            generate_alt_text: Whether to generate alt text descriptions
+            enable_tagging: Whether to enable tag assignment
+            
+        Returns:
+            Dict containing processing results and statistics
+        """
+        # First, process images normally
+        results = self.process_batch(preset_name, output_folder)
+        
+        # Handle alt text generation if enabled
+        if generate_alt_text and self.enable_alt_text and self.alt_text_generator:
+            logger.info("Starting alt text generation phase")
+            
+            # Run alt text generation in async context
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                alt_text_results = loop.run_until_complete(
+                    self._generate_alt_text_batch()
+                )
+                
+                # Update results with alt text statistics
+                results['alt_text_generated'] = sum(
+                    1 for item in self.queue 
+                    if item.alt_text_status == AltTextStatus.COMPLETED
+                )
+                results['alt_text_failed'] = sum(
+                    1 for item in self.queue 
+                    if item.alt_text_status == AltTextStatus.ERROR
+                )
+                
+            except Exception as e:
+                logger.error(f"Alt text generation failed: {e}")
+                results['alt_text_error'] = str(e)
+                
+            finally:
+                loop.close()
+        
+        # Handle tag assignment if enabled
+        if enable_tagging:
+            logger.info("Starting tag assignment phase")
+            
+            try:
+                tag_results = self._assign_tags_batch()
+                
+                # Update results with tag statistics
+                results['tags_assigned'] = sum(
+                    1 for item in self.queue 
+                    if item.tag_status == TagStatus.COMPLETED and item.tags
+                )
+                results['tags_failed'] = sum(
+                    1 for item in self.queue 
+                    if item.tag_status == TagStatus.ERROR
+                )
+                
+            except Exception as e:
+                logger.error(f"Tag assignment failed: {e}")
+                results['tag_error'] = str(e)
+                
+        return results
+        
+    def _assign_tags_batch(self):
+        """Assign tags to all processed images in the queue based on preferences."""
+        tag_prefs = PreferencesManager.get_instance().get('tags', {})
+        default_categories = tag_prefs.get('default_categories', {})
+        
+        # Simple tag assignment based on file types and naming patterns
+        for item in self.queue:
+            if item.status == ProcessingStatus.COMPLETED:
+                try:
+                    # Basic tag assignment logic
+                    assigned_tags = []
+                    
+                    # Assign tags based on filename patterns (simple heuristics)
+                    filename_lower = item.source_path.name.lower()
+                    
+                    # Content-based tags
+                    if any(word in filename_lower for word in ['portrait', 'person', 'people']):
+                        assigned_tags.extend(['person', 'portrait'])
+                    elif any(word in filename_lower for word in ['landscape', 'nature', 'outdoor']):
+                        assigned_tags.extend(['landscape', 'outdoor'])
+                    elif any(word in filename_lower for word in ['food', 'restaurant', 'kitchen']):
+                        assigned_tags.extend(['food'])
+                    elif any(word in filename_lower for word in ['tech', 'computer', 'device']):
+                        assigned_tags.extend(['technology'])
+                    else:
+                        assigned_tags.append('object')  # Default content tag
+                    
+                    # Style-based tags based on processing preset
+                    preset_name = getattr(self, 'current_preset_name', 'unknown')
+                    if 'web' in preset_name.lower():
+                        assigned_tags.append('article')
+                    elif 'email' in preset_name.lower():
+                        assigned_tags.append('thumbnail')
+                    elif 'instagram' in preset_name.lower():
+                        assigned_tags.append('social-media')
+                    
+                    # Remove duplicates and limit
+                    assigned_tags = list(set(assigned_tags))[:5]  # Limit to 5 tags
+                    
+                    # Update item with tags
+                    item.tags = assigned_tags
+                    item.tag_status = TagStatus.COMPLETED
+                    item.tag_application_time = 0.1  # Minimal processing time for simple assignment
+                    
+                    # Organize tags by category
+                    item.tag_categories = {}
+                    for tag in assigned_tags:
+                        # Simple category assignment
+                        if tag in ['person', 'people', 'landscape', 'object', 'food', 'technology']:
+                            if 'Content' not in item.tag_categories:
+                                item.tag_categories['Content'] = []
+                            item.tag_categories['Content'].append(tag)
+                        elif tag in ['portrait', 'wide-shot', 'close-up']:
+                            if 'Style' not in item.tag_categories:
+                                item.tag_categories['Style'] = []
+                            item.tag_categories['Style'].append(tag)
+                        elif tag in ['article', 'thumbnail', 'social-media']:
+                            if 'Usage' not in item.tag_categories:
+                                item.tag_categories['Usage'] = []
+                            item.tag_categories['Usage'].append(tag)
+                    
+                    logger.debug(f"Assigned tags {assigned_tags} to {item.source_path.name}")
+                    
+                except Exception as e:
+                    item.tag_status = TagStatus.ERROR
+                    item.tag_error = f"Tag assignment failed: {str(e)}"
+                    logger.error(f"Failed to assign tags to {item.source_path.name}: {e}")
+    
     async def _generate_alt_text_batch(self):
         """Generate alt text for all processed images in the queue."""
         async with self.alt_text_generator:
