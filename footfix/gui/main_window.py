@@ -23,6 +23,7 @@ from ..utils.notifications import NotificationManager
 from .unified_widget import UnifiedProcessingWidget
 from .alt_text_widget import AltTextWidget
 from .tag_widget import TagWidget
+from .metadata_export_widget import MetadataExportWidget
 from .preview_widget import PreviewWidget
 from .settings_dialog import AdvancedSettingsDialog
 from .menu_bar import MenuBarManager
@@ -100,6 +101,10 @@ class MainWindow(QMainWindow):
         self.tag_widget.tag_updated.connect(self.on_tags_updated)
         self.tag_widget.tag_assignment_requested.connect(self.on_tag_assignment_requested)
         self.tab_widget.addTab(self.tag_widget, "Tag Management")
+        
+        # Metadata Export tab
+        self.metadata_export_widget = MetadataExportWidget()
+        self.tab_widget.addTab(self.metadata_export_widget, "Metadata Export")
         
         # Status/Log area
         log_group = QGroupBox("Status")
@@ -219,6 +224,8 @@ class MainWindow(QMainWindow):
         self.alt_text_widget.set_batch_items(self.unified_widget.batch_processor.queue)
         # Update tag widget with latest batch data
         self.tag_widget.set_batch_items(self.unified_widget.batch_processor.queue)
+        # Update metadata export widget with latest batch data
+        self.metadata_export_widget.set_batch_items(self.unified_widget.batch_processor.queue)
         
     def on_alt_text_updated(self, updates: dict):
         """Handle alt text updates from the review tab."""
@@ -231,11 +238,13 @@ class MainWindow(QMainWindow):
         self.unified_widget.on_regenerate_requested(filenames)
         
     def on_queue_changed(self, count: int):
-        """Handle queue changes to keep alt text tab updated."""
+        """Handle queue changes to keep tabs updated."""
         # Update alt text widget with current batch data
         self.alt_text_widget.set_batch_items(self.unified_widget.batch_processor.queue)
         # Update tag widget with current batch data
         self.tag_widget.set_batch_items(self.unified_widget.batch_processor.queue)
+        # Update metadata export widget with current batch data
+        self.metadata_export_widget.set_batch_items(self.unified_widget.batch_processor.queue)
         
     def on_tags_updated(self, updates: dict):
         """Handle tag updates from the tag management tab."""
