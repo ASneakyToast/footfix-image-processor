@@ -300,6 +300,19 @@ class FilenameTemplateWidget(QWidget):
         else:
             return self.template_combo.currentData()
             
+    def set_template(self, template: str):
+        """Set the current template string."""
+        # Check if it matches any of the predefined templates
+        for i in range(self.template_combo.count()):
+            if self.template_combo.itemData(i) == template:
+                self.template_combo.setCurrentIndex(i)
+                return
+                
+        # If not found in predefined templates, set as custom
+        self.template_combo.setCurrentText("Custom")
+        self.custom_template.setText(template)
+        self.update_preview()
+            
     def update_preview(self):
         """Update the filename preview."""
         template = self.get_template()

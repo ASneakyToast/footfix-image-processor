@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt, Signal
 from pathlib import Path
 
 from ..utils.filename_template import FilenameTemplateWidget
+from ..utils.preferences import PreferencesManager
 
 
 class OutputSettingsDialog(QDialog):
@@ -24,6 +25,7 @@ class OutputSettingsDialog(QDialog):
     def __init__(self, parent=None, current_settings=None):
         super().__init__(parent)
         self.current_settings = current_settings or {}
+        self.prefs_manager = PreferencesManager.get_instance()
         self.recent_folders = []
         self.favorite_folders = []
         
@@ -122,7 +124,7 @@ class OutputSettingsDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         )
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self.accept_and_save)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         
@@ -224,3 +226,31 @@ class OutputSettingsDialog(QDialog):
             'recent_folders': self.recent_folders,
             'favorite_folders': self.favorite_folders,
         }
+        
+    def accept_and_save(self):
+        """Accept the dialog and save settings to preferences."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Get the current settings
+        settings = self.get_settings()
+        
+        # Save to global preferences
+        self.prefs_manager.set('output.default_folder', str(settings['output_folder']))
+        self.prefs_manager.set('output.filename_template', settings['filename_template'])
+        self.prefs_manager.set('output.duplicate_strategy', settings['duplicate_strategy'])
+        self.prefs_manager.set('output.recent_folders', settings['recent_folders'])
+        self.prefs_manager.set('output.favorite_folders', settings['favorite_folders'])
+        
+        # Save preferences to disk
+        success = self.prefs_manager.save()
+        if success:
+            logger.info(f"Output settings saved to preferences: {settings}")
+        else:
+            logger.error("Failed to save output settings to preferences")
+        
+        # Emit signal for any listeners
+        self.settings_changed.emit(settings)
+        
+        # Accept the dialog
+        self.accept()

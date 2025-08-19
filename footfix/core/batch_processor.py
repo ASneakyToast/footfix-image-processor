@@ -19,6 +19,7 @@ from .processor import ImageProcessor
 from ..presets.profiles import PresetProfile, get_preset
 from .alt_text_generator import AltTextStatus, AltTextGenerator
 from .tag_manager import TagStatus, TagManager
+from ..utils.filename_template import FilenameTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -185,18 +186,36 @@ class BatchProcessor:
         self.progress = BatchProgress()
         logger.info("Queue cleared")
         
-    def set_output_paths(self, output_folder: Path, preset: PresetProfile):
+    def set_output_paths(self, output_folder: Path, preset: PresetProfile, 
+                         filename_template: Optional[str] = None):
         """
         Set output paths for all items in the queue based on preset.
         
         Args:
             output_folder: Destination folder for processed images
             preset: Preset profile to use for filename generation
+            filename_template: Optional custom filename template string
         """
         output_folder.mkdir(parents=True, exist_ok=True)
         
+        # Initialize filename template engine if custom template provided
+        if filename_template:
+            template_engine = FilenameTemplate()
+            template_engine.reset_counter()  # Reset counter for batch processing
+        
         for item in self.queue:
-            filename = preset.get_suggested_filename(item.source_path)
+            if filename_template:
+                # Use custom filename template
+                filename = template_engine.generate_filename(
+                    item.source_path,
+                    filename_template,
+                    preset.config.name,
+                    output_format=preset.config.format.lower()
+                )
+            else:
+                # Fall back to preset's default filename generation
+                filename = preset.get_suggested_filename(item.source_path)
+            
             item.output_path = output_folder / filename
             
     def register_progress_callback(self, callback: Callable[[BatchProgress], None]):
@@ -286,13 +305,14 @@ class BatchProcessor:
         self.tag_manager = tag_manager
         logger.info("Tag manager configured for batch processing")
                 
-    def process_batch(self, preset_name: str, output_folder: Path) -> Dict[str, Any]:
+    def process_batch(self, preset_name: str, output_folder: Path, filename_template: Optional[str] = None) -> Dict[str, Any]:
         """
         Process all images in the queue with the specified preset.
         
         Args:
             preset_name: Name of the preset to apply
             output_folder: Destination folder for processed images
+            filename_template: Optional custom filename template string
             
         Returns:
             Dict containing processing results and statistics
@@ -307,7 +327,7 @@ class BatchProcessor:
             return {"success": False, "message": f"Invalid preset: {preset_name}"}
             
         # Set output paths
-        self.set_output_paths(output_folder, preset)
+        self.set_output_paths(output_folder, preset, filename_template)
         
         # Reset progress
         self.progress = BatchProgress(total_items=len(self.queue))
@@ -401,19 +421,20 @@ class BatchProcessor:
         logger.info(f"Batch processing complete: {results}")
         return results
         
-    def process_batch_with_alt_text(self, preset_name: str, output_folder: Path) -> Dict[str, Any]:
+    def process_batch_with_alt_text(self, preset_name: str, output_folder: Path, filename_template: Optional[str] = None) -> Dict[str, Any]:
         """
         Process all images in the queue with the specified preset and optional alt text generation.
         
         Args:
             preset_name: Name of the preset to apply
             output_folder: Destination folder for processed images
+            filename_template: Optional custom filename template string
             
         Returns:
             Dict containing processing results and statistics
         """
         # First, process images normally
-        results = self.process_batch(preset_name, output_folder)
+        results = self.process_batch(preset_name, output_folder, filename_template)
         
         # Then, if alt text is enabled, generate descriptions
         if self.enable_alt_text and self.alt_text_generator:
@@ -447,7 +468,7 @@ class BatchProcessor:
                 
         return results
         
-    def process_batch_with_features(self, preset_name: str, output_folder: Path, generate_alt_text: bool = False, enable_tagging: bool = False, enable_ai_tagging: bool = False) -> Dict[str, Any]:
+    def process_batch_with_features(self, preset_name: str, output_folder: Path, generate_alt_text: bool = False, enable_tagging: bool = False, enable_ai_tagging: bool = False, filename_template: Optional[str] = None) -> Dict[str, Any]:
         """
         Process all images in the queue with the specified preset and optional features.
         
@@ -457,12 +478,13 @@ class BatchProcessor:
             generate_alt_text: Whether to generate alt text descriptions
             enable_tagging: Whether to enable tag assignment
             enable_ai_tagging: Whether to enable AI-powered tag generation
+            filename_template: Optional custom filename template string
             
         Returns:
             Dict containing processing results and statistics
         """
         # First, process images normally
-        results = self.process_batch(preset_name, output_folder)
+        results = self.process_batch(preset_name, output_folder, filename_template)
         
         # Handle alt text generation if enabled
         if generate_alt_text and self.enable_alt_text and self.alt_text_generator:

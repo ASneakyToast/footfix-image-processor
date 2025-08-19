@@ -38,7 +38,7 @@ class BatchProcessingThread(QThread):
     status_message = Signal(str)
     alt_text_progress = Signal(int, int, str)  # current, total, message
     
-    def __init__(self, batch_processor: BatchProcessor, preset_name: str, output_folder: Path, generate_alt_text: bool = False, enable_tagging: bool = False, enable_ai_tagging: bool = False):
+    def __init__(self, batch_processor: BatchProcessor, preset_name: str, output_folder: Path, generate_alt_text: bool = False, enable_tagging: bool = False, enable_ai_tagging: bool = False, filename_template: Optional[str] = None):
         super().__init__()
         self.batch_processor = batch_processor
         self.preset_name = preset_name
@@ -46,6 +46,7 @@ class BatchProcessingThread(QThread):
         self.generate_alt_text = generate_alt_text
         self.enable_tagging = enable_tagging
         self.enable_ai_tagging = enable_ai_tagging
+        self.filename_template = filename_template
         self._is_cancelled = False
         
     def run(self):
@@ -66,11 +67,12 @@ class BatchProcessingThread(QThread):
                     self.output_folder,
                     generate_alt_text=self.generate_alt_text,
                     enable_tagging=self.enable_tagging,
-                    enable_ai_tagging=self.enable_ai_tagging
+                    enable_ai_tagging=self.enable_ai_tagging,
+                    filename_template=self.filename_template
                 )
             else:
                 # No features enabled - standard processing
-                results = self.batch_processor.process_batch(self.preset_name, self.output_folder)
+                results = self.batch_processor.process_batch(self.preset_name, self.output_folder, self.filename_template)
             
             # Emit completion
             self.batch_completed.emit(results)

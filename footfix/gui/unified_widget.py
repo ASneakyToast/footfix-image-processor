@@ -66,6 +66,9 @@ class UnifiedProcessingWidget(QWidget):
         # Load preferences
         self.load_preferences()
         
+        # Connect to preferences changes for real-time updates
+        self.prefs_manager.preferences_changed.connect(self.on_preferences_changed)
+        
         self.setup_ui()
         
         # Timer for UI updates during processing
@@ -513,6 +516,15 @@ class UnifiedProcessingWidget(QWidget):
             'favorite_folders': self.prefs_manager.get('output.favorite_folders', [])
         }
         
+    def on_preferences_changed(self, key: str):
+        """Handle preferences changes."""
+        if key.startswith('output.'):
+            # Reload output settings when they change
+            self.load_preferences()
+            # Update the UI to reflect the changes
+            self.output_folder_edit.setText(str(self.output_folder))
+            logger.info(f"Updated output settings from preferences: {key}")
+        
     def update_queue_display(self):
         """Update the queue display based on current queue state."""
         queue_info = self.batch_processor.get_queue_info()
@@ -821,7 +833,8 @@ class UnifiedProcessingWidget(QWidget):
             output_folder,
             generate_alt_text=self.enable_alt_text_cb.isChecked(),
             enable_tagging=self.enable_tags_cb.isChecked(),
-            enable_ai_tagging=self.enable_ai_tags_cb.isChecked() and self.enable_ai_tags_cb.isEnabled()
+            enable_ai_tagging=self.enable_ai_tags_cb.isChecked() and self.enable_ai_tags_cb.isEnabled(),
+            filename_template=self.output_settings.get('filename_template')
         )
         
         self.processing_thread.progress_updated.connect(self.on_progress_updated)

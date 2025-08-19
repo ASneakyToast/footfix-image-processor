@@ -373,37 +373,16 @@ class MainWindow(QMainWindow):
         
                 
     def save_as(self):
-        """Save the processed image with a custom name."""
-        if not self.current_image_path or not self.processor.current_image:
+        """Save the processed image using the unified batch processing system."""
+        if not self.current_image_path:
             return
             
-        # Get selected preset from unified widget
-        preset_name = self.unified_widget.preset_combo.currentData()
-        preset = get_preset(preset_name)
+        # Clear the queue and add the current image
+        self.unified_widget.clear_queue()
+        self.unified_widget.add_images_to_queue([self.current_image_path])
         
-        if not preset:
-            return
-            
-        # Suggest filename
-        suggested_name = preset.get_suggested_filename(self.current_image_path)
-        
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Image As",
-            str(self.unified_widget.output_folder / suggested_name),
-            "JPEG Files (*.jpg *.jpeg);;PNG Files (*.png);;All Files (*.*)"
-        )
-        
-        if file_path:
-            # Process and save
-            output_path = Path(file_path)
-            self.unified_widget.output_folder = output_path.parent  # Update output folder
-            self.unified_widget.output_folder_edit.setText(str(self.unified_widget.output_folder))
-            
-            # Start processing with custom path via unified widget
-            # Note: This is a simplified approach - for more advanced save_as functionality,
-            # we would need to extend the unified widget to support custom output paths
-            self.unified_widget.start_processing()
+        # Start processing using the unified system (which now uses custom filename templates)
+        self.unified_widget.start_processing()
             
         
     def toggle_fullscreen(self):
@@ -520,15 +499,24 @@ class MainWindow(QMainWindow):
         """Show the output settings dialog."""
         dialog = OutputSettingsDialog(self, self.unified_widget.output_settings)
         
+        # Connect to dialog's settings changed signal
+        dialog.settings_changed.connect(self.on_output_settings_changed)
+        
         if dialog.exec() == QDialog.Accepted:
-            self.unified_widget.output_settings = dialog.get_settings()
-            self.unified_widget.output_folder = self.unified_widget.output_settings['output_folder']
-            self.unified_widget.output_folder_edit.setText(str(self.unified_widget.output_folder))
+            # Settings are already saved to preferences by the dialog
+            # Just update the unified widget to reflect the changes
+            self.unified_widget.load_preferences()
             
             # Reset filename template counter for new batch
             self.unified_widget.filename_template.reset_counter()
             
-            logger.info(f"Output settings updated: {self.unified_widget.output_settings}")
+            logger.info(f"Output settings updated and saved to preferences")
+            
+    def on_output_settings_changed(self, settings):
+        """Handle output settings changes from the dialog."""
+        # Update the unified widget's UI to reflect the changes
+        self.unified_widget.output_folder_edit.setText(str(settings['output_folder']))
+        logger.info(f"Output settings UI updated: {settings}")
             
     def load_preferences(self):
         """Load preferences from the preferences manager."""
