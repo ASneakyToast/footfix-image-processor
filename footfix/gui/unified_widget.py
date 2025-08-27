@@ -33,6 +33,7 @@ from ..utils.widget_configurator import WidgetConfigurator
 from .batch_widget import BatchProcessingThread
 from .alt_text_widget import AltTextWidget
 from .tag_widget import TagWidget
+from .components.queue_widget import QueueManagementWidget
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +87,10 @@ class UnifiedProcessingWidget(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(15)
         
-        # Smart Queue Area - collapsible based on content
-        self.setup_queue_area(main_layout)
+        # Queue Management Widget
+        self.queue_widget = QueueManagementWidget()
+        self.setup_queue_connections()
+        main_layout.addWidget(self.queue_widget)
         
         # Processing Controls - always visible
         self.setup_processing_controls(main_layout)
@@ -104,79 +107,17 @@ class UnifiedProcessingWidget(QWidget):
         # Tag Integration
         self.setup_tag_integration(main_layout)
         
-        # Enable drag and drop
-        self.setAcceptDrops(True)
-        
         # Initialize UI state for empty queue
         self.update_queue_display()
         
-    def setup_queue_area(self, main_layout):
-        """Set up the smart queue area that adapts to content."""
-        self.queue_group = QGroupBox("Image Queue")
-        queue_layout = QVBoxLayout(self.queue_group)
-        
-        # Queue controls toolbar
-        toolbar_layout = QHBoxLayout()
-        
-        self.add_images_btn = QPushButton("Add Images")
-        self.add_images_btn.clicked.connect(self.add_images)
-        toolbar_layout.addWidget(self.add_images_btn)
-        
-        self.add_folder_btn = QPushButton("Add Folder")
-        self.add_folder_btn.clicked.connect(self.add_folder)
-        toolbar_layout.addWidget(self.add_folder_btn)
-        
-        self.clear_queue_btn = QPushButton("Clear All")
-        self.clear_queue_btn.clicked.connect(self.clear_queue)
-        toolbar_layout.addWidget(self.clear_queue_btn)
-        
-        toolbar_layout.addStretch()
-        
-        self.queue_count_label = QLabel("0 images")
-        toolbar_layout.addWidget(self.queue_count_label)
-        
-        queue_layout.addLayout(toolbar_layout)
-        
-        # Drop zone / queue display area
-        self.setup_queue_display(queue_layout)
-        
-        main_layout.addWidget(self.queue_group)
-        
-    def setup_queue_display(self, parent_layout):
-        """Set up the queue display that adapts from drop zone to queue table."""
-        # Container for switching between drop zone and queue table
-        self.queue_container = QWidget()
-        container_layout = QVBoxLayout(self.queue_container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Drop zone for empty state
-        self.drop_zone = QLabel("Drag images here or use buttons above to add images")
-        self.drop_zone.setAlignment(Qt.AlignCenter)
-        self.drop_zone.setMinimumHeight(150)
-        self.drop_zone.setStyleSheet("""
-            QLabel {
-                border: 2px dashed #aaa;
-                border-radius: 10px;
-                padding: 20px;
-                background-color: #f8f8f8;
-                color: #666;
-                font-size: 14px;
-            }
-        """)
-        container_layout.addWidget(self.drop_zone)
-        
-        # Queue table for when we have images
-        self.queue_table = QTableWidget()
-        self.queue_table.setColumnCount(5)
-        self.queue_table.setHorizontalHeaderLabels(["Filename", "Size", "Status", "Error", "Actions"])
-        self.queue_table.horizontalHeader().setStretchLastSection(True)
-        self.queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.queue_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.queue_table.itemSelectionChanged.connect(self.on_selection_changed)
-        self.queue_table.setVisible(False)  # Hidden initially
-        container_layout.addWidget(self.queue_table)
-        
-        parent_layout.addWidget(self.queue_container)
+    def setup_queue_connections(self):
+        """Connect queue widget signals to handlers."""
+        self.queue_widget.add_images_requested.connect(self.add_images)
+        self.queue_widget.add_folder_requested.connect(self.add_folder)
+        self.queue_widget.clear_queue_requested.connect(self.clear_queue)
+        self.queue_widget.remove_item_requested.connect(self.remove_item)
+        self.queue_widget.selection_changed.connect(self.on_queue_selection_changed)
+        self.queue_widget.files_dropped.connect(self.on_files_dropped)
         
     def setup_processing_controls(self, main_layout):
         """Set up the processing controls section."""
@@ -531,27 +472,15 @@ class UnifiedProcessingWidget(QWidget):
         queue_info = self.batch_processor.get_queue_info()
         queue_size = len(queue_info)
         
-        # Update queue count
+        # Delegate queue display to the queue widget
+        self.queue_widget.update_queue_display(queue_info)
+        
+        # Update process button text and state
         if queue_size == 0:
-            self.queue_count_label.setText("0 images")
-        elif queue_size == 1:
-            self.queue_count_label.setText("1 image")
-        else:
-            self.queue_count_label.setText(f"{queue_size} images")
-            
-        # Smart UI adaptation based on queue size
-        if queue_size == 0:
-            # Show drop zone, hide table
-            self.drop_zone.setVisible(True)
-            self.queue_table.setVisible(False)
             self.process_button.setText("Add Images to Start")
             self.process_button.setEnabled(False)
             self.preview_button.setEnabled(False)
         else:
-            # Show table, hide drop zone
-            self.drop_zone.setVisible(False)
-            self.queue_table.setVisible(True)
-            
             # Update process button text
             if queue_size == 1:
                 self.process_button.setText("Process Image")
@@ -559,11 +488,8 @@ class UnifiedProcessingWidget(QWidget):
                 self.process_button.setText(f"Process {queue_size} Images")
             self.process_button.setEnabled(not self.is_processing)
             
-            # Update table content
-            self.update_queue_table(queue_info)
-            
-        # Update preview button
-        selected_rows = self.queue_table.selectionModel().selectedRows() if queue_size > 0 else []
+        # Update preview button based on selection
+        selected_rows = self.queue_widget.get_selected_indices()
         self.preview_button.setEnabled(len(selected_rows) == 1 and not self.is_processing)
         
         # Show/hide export button based on alt text availability
@@ -586,125 +512,21 @@ class UnifiedProcessingWidget(QWidget):
         if queue_size == 1:
             self.image_loaded.emit(str(self.batch_processor.queue[0].source_path))
             
-    def update_queue_table(self, queue_info):
-        """Update the queue table with current queue information."""
-        self.queue_table.setRowCount(len(queue_info))
+    def on_queue_selection_changed(self, selected_indices: List[int]):
+        """Handle queue selection changes from the queue widget."""
+        # Update preview button based on selection
+        self.preview_button.setEnabled(len(selected_indices) == 1 and not self.is_processing)
         
-        for row, item_info in enumerate(queue_info):
-            # Filename
-            self.queue_table.setItem(row, 0, QTableWidgetItem(item_info['filename']))
-            
-            # Size
-            size_mb = item_info['size'] / (1024 * 1024)
-            self.queue_table.setItem(row, 1, QTableWidgetItem(f"{size_mb:.1f} MB"))
-            
-            # Status
-            status_item = QTableWidgetItem(item_info['status'])
-            if item_info['status'] == 'completed':
-                status_item.setForeground(Qt.green)
-            elif item_info['status'] == 'failed':
-                status_item.setForeground(Qt.red)
-            elif item_info['status'] == 'processing':
-                status_item.setForeground(Qt.blue)
-            self.queue_table.setItem(row, 2, status_item)
-            
-            # Error
-            error_text = item_info['error'] or ""
-            self.queue_table.setItem(row, 3, QTableWidgetItem(error_text))
-            
-            # Remove button
-            if not self.is_processing and item_info['status'] == 'pending':
-                remove_btn = QPushButton("Remove")
-                remove_btn.clicked.connect(lambda checked, idx=row: self.remove_item(idx))
-                self.queue_table.setCellWidget(row, 4, remove_btn)
-            else:
-                self.queue_table.setCellWidget(row, 4, None)
-                
-    # Drag and Drop Support
-    def dragEnterEvent(self, event: QDragEnterEvent):
-        """Handle drag enter events."""
-        if event.mimeData().hasUrls():
-            # Check if any URL is a valid image or directory
-            for url in event.mimeData().urls():
-                path = Path(url.toLocalFile())
-                if path.is_dir() or path.suffix.lower() in ImageProcessor.SUPPORTED_FORMATS:
-                    event.acceptProposedAction()
-                    # Visual feedback
-                    self.drop_zone.setStyleSheet("""
-                        QLabel {
-                            border: 2px solid #007AFF;
-                            border-radius: 10px;
-                            padding: 20px;
-                            background-color: #e6f2ff;
-                            color: #007AFF;
-                            font-size: 14px;
-                        }
-                    """)
-                    return
-                    
-    def dropEvent(self, event: QDropEvent):
-        """Handle drop events."""
-        # Reset visual feedback
-        self.drop_zone.setStyleSheet("""
-            QLabel {
-                border: 2px dashed #aaa;
-                border-radius: 10px;
-                padding: 20px;
-                background-color: #f8f8f8;
-                color: #666;
-                font-size: 14px;
-            }
-        """)
-        
-        urls = event.mimeData().urls()
-        if not urls:
-            return
-            
-        # Collect all valid image paths
-        image_paths = []
-        
-        for url in urls:
-            path = Path(url.toLocalFile())
-            
-            if path.is_file() and path.suffix.lower() in ImageProcessor.SUPPORTED_FORMATS:
-                image_paths.append(path)
-            elif path.is_dir():
-                # Add all images from directory
-                for img_path in path.rglob('*'):
-                    if img_path.is_file() and img_path.suffix.lower() in ImageProcessor.SUPPORTED_FORMATS:
-                        image_paths.append(img_path)
-                        
-        if not image_paths:
-            QMessageBox.warning(
-                self,
-                "No Valid Images",
-                "No valid image files were found in the dropped items."
-            )
-            return
-            
-        # Add all images to queue
-        added = self.add_images_to_queue(image_paths)
-        if added > 0:
+    def on_files_dropped(self, file_paths: List[Path]):
+        """Handle files dropped on the queue widget."""
+        added_count = self.add_images_to_queue(file_paths)
+        if added_count > 0:
             QMessageBox.information(
                 self,
-                "Images Added",
-                f"Added {added} images to processing queue."
+                "Images Added", 
+                f"Added {added_count} images to processing queue."
             )
             
-    def dragLeaveEvent(self, event):
-        """Handle drag leave events."""
-        # Reset visual feedback
-        self.drop_zone.setStyleSheet("""
-            QLabel {
-                border: 2px dashed #aaa;
-                border-radius: 10px;
-                padding: 20px;
-                background-color: #f8f8f8;
-                color: #666;
-                font-size: 14px;
-            }
-        """)
-        
     # Queue Management Methods
     def add_images(self):
         """Open dialog to select multiple images."""
@@ -791,12 +613,6 @@ class UnifiedProcessingWidget(QWidget):
         if self.batch_processor.remove_image(index):
             self.update_queue_display()
             
-    def on_selection_changed(self):
-        """Handle table selection changes."""
-        # Enable/disable preview button based on selection
-        selected_rows = self.queue_table.selectionModel().selectedRows()
-        self.preview_button.setEnabled(len(selected_rows) == 1 and not self.is_processing)
-        
     # Processing Methods
     def start_processing(self):
         """Start processing with current settings."""
@@ -815,9 +631,8 @@ class UnifiedProcessingWidget(QWidget):
         self.process_button.setText("Processing...")
         self.process_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
-        self.add_images_btn.setEnabled(False)
-        self.add_folder_btn.setEnabled(False)
-        self.clear_queue_btn.setEnabled(False)
+        # Update queue widget processing state
+        self.queue_widget.set_processing_state(True)
         
         # Show progress area
         self.progress_group.setVisible(True)
@@ -889,9 +704,8 @@ class UnifiedProcessingWidget(QWidget):
         self.process_button.setEnabled(queue_size > 0)
         self.cancel_button.setEnabled(False)
         self.cancel_button.setText("Cancel")
-        self.add_images_btn.setEnabled(True)
-        self.add_folder_btn.setEnabled(True)
-        self.clear_queue_btn.setEnabled(True)
+        # Update queue widget processing state
+        self.queue_widget.set_processing_state(False)
         self.current_item_label.setVisible(False)
         
         # Hide progress area if all items are processed
@@ -978,12 +792,12 @@ class UnifiedProcessingWidget(QWidget):
     # Preview and Settings Methods
     def show_preview(self):
         """Show preview for the selected image."""
-        selected_rows = self.queue_table.selectionModel().selectedRows()
-        if not selected_rows:
+        selected_indices = self.queue_widget.get_selected_indices()
+        if not selected_indices:
             return
             
         # Get the selected item
-        row = selected_rows[0].row()
+        row = selected_indices[0]
         if row >= len(self.batch_processor.queue):
             return
             
