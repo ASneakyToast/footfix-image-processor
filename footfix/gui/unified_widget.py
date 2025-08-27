@@ -27,6 +27,7 @@ from ..utils.notifications import NotificationManager
 from ..utils.preferences import PreferencesManager
 from ..utils.filename_template import FilenameTemplate
 from ..utils.alt_text_exporter import AltTextExporter, ExportFormat, ExportOptions
+from ..utils.api_validator import ApiKeyValidator
 from .batch_widget import BatchProcessingThread
 from .alt_text_widget import AltTextWidget
 from .tag_widget import TagWidget
@@ -54,6 +55,7 @@ class UnifiedProcessingWidget(QWidget):
         self.prefs_manager = PreferencesManager.get_instance()
         self.filename_template = FilenameTemplate()
         self.tag_manager = TagManager()
+        self.api_validator = ApiKeyValidator(self.prefs_manager)
         
         # Apply memory optimization settings from preferences
         memory_limit = self.prefs_manager.get('advanced.memory_limit_mb', 2048)
@@ -367,10 +369,7 @@ class UnifiedProcessingWidget(QWidget):
         """Refresh alt text checkbox availability based on API key configuration."""
         logger.info("Refreshing alt text checkbox availability")
         
-        # Use fresh preferences manager to get latest values
-        api_key = self.prefs_manager.get('alt_text.api_key')
-        
-        if api_key and api_key.strip():
+        if self.api_validator.is_alt_text_available():
             logger.info("API key found - enabling alt text checkbox")
             self.enable_alt_text_cb.setEnabled(True)
             self.enable_alt_text_cb.setToolTip(
@@ -385,7 +384,7 @@ class UnifiedProcessingWidget(QWidget):
             self.enable_alt_text_cb.setEnabled(False)
             self.enable_alt_text_cb.setChecked(False)
             self.enable_alt_text_cb.setToolTip(
-                "Configure Anthropic API key in Preferences → Alt Text to enable alt text generation"
+                self.api_validator.get_alt_text_error_message()
             )
         
         # Also refresh AI tag availability since they can share the same API key
@@ -456,17 +455,7 @@ class UnifiedProcessingWidget(QWidget):
         """Refresh AI tag checkbox availability based on API key configuration."""
         logger.info("Refreshing AI tag checkbox availability")
         
-        # Check if we can share API key from alt text or have separate key
-        share_api_key = self.prefs_manager.get('tags.ai_share_api_key_with_alt_text', True)
-        
-        if share_api_key:
-            # Use alt text API key
-            api_key = self.prefs_manager.get('alt_text.api_key')
-        else:
-            # Use separate API key (if implemented in future)
-            api_key = self.prefs_manager.get('tags.ai_api_key')
-        
-        if api_key and api_key.strip():
+        if self.api_validator.is_ai_tags_available():
             logger.info("API key found - enabling AI tag checkbox")
             self.enable_ai_tags_cb.setEnabled(True)
             self.enable_ai_tags_cb.setToolTip(
@@ -481,7 +470,7 @@ class UnifiedProcessingWidget(QWidget):
             self.enable_ai_tags_cb.setEnabled(False)
             self.enable_ai_tags_cb.setChecked(False)
             self.enable_ai_tags_cb.setToolTip(
-                "Configure Anthropic API key in Preferences → Alt Text to enable AI tag generation"
+                self.api_validator.get_ai_tags_error_message()
             )
         
         self._update_tag_status_display()
@@ -1036,14 +1025,14 @@ class UnifiedProcessingWidget(QWidget):
     def on_alt_text_toggled(self, checked: bool):
         """Handle alt text generation toggle."""
         if checked:
-            # Check API key again
-            api_key = self.prefs_manager.get('alt_text.api_key')
-            if not api_key:
+            # Validate API key
+            is_valid, api_key, error_message = self.api_validator.validate_alt_text_api_key()
+            if not is_valid:
                 self.enable_alt_text_cb.setChecked(False)
                 QMessageBox.warning(
                     self,
                     "API Key Required",
-                    "Please configure your Anthropic API key in preferences to enable alt text generation."
+                    error_message or "Please configure your Anthropic API key in preferences to enable alt text generation."
                 )
                 return
                 
@@ -1166,20 +1155,14 @@ class UnifiedProcessingWidget(QWidget):
     def on_ai_tags_toggled(self, checked: bool):
         """Handle AI tag generation toggle."""
         if checked:
-            # Check API key again
-            share_api_key = self.prefs_manager.get('tags.ai_share_api_key_with_alt_text', True)
-            
-            if share_api_key:
-                api_key = self.prefs_manager.get('alt_text.api_key')
-            else:
-                api_key = self.prefs_manager.get('tags.ai_api_key')
-            
-            if not api_key:
+            # Validate API key
+            is_valid, api_key, error_message = self.api_validator.validate_ai_tag_api_key()
+            if not is_valid:
                 self.enable_ai_tags_cb.setChecked(False)
                 QMessageBox.warning(
                     self,
                     "API Key Required",
-                    "Please configure your Anthropic API key in preferences to enable AI tag generation."
+                    error_message or "Please configure your Anthropic API key in preferences to enable AI tag generation."
                 )
                 return
                 
