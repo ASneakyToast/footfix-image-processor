@@ -175,7 +175,7 @@ class UnifiedProcessingWidget(QWidget):
         main_layout.addLayout(alt_text_layout)
         
         # Check if API key is configured
-        self.refresh_alt_text_availability()
+        self.ui_state_manager.refresh_api_availability()
         
         # Alt text widget for managing generated text
         self.alt_text_widget = AltTextWidget()
@@ -184,31 +184,6 @@ class UnifiedProcessingWidget(QWidget):
         self.alt_text_widget.setVisible(False)  # Hidden until we have alt text results
         main_layout.addWidget(self.alt_text_widget)
         
-    def refresh_alt_text_availability(self):
-        """Refresh alt text checkbox availability based on API key configuration."""
-        logger.info("Refreshing alt text checkbox availability")
-        
-        if self.api_validator.is_alt_text_available():
-            logger.info("API key found - enabling alt text checkbox")
-            self.enable_alt_text_cb.setEnabled(True)
-            self.enable_alt_text_cb.setToolTip(
-                "Enable automatic alt text generation using AI after image processing"
-            )
-            # Check the checkbox if it was previously selected
-            enabled_by_default = self.prefs_manager.get('alt_text.enabled', False)
-            if enabled_by_default:
-                self.enable_alt_text_cb.setChecked(True)
-        else:
-            logger.info("No API key found - disabling alt text checkbox")
-            self.enable_alt_text_cb.setEnabled(False)
-            self.enable_alt_text_cb.setChecked(False)
-            self.enable_alt_text_cb.setToolTip(
-                self.api_validator.get_alt_text_error_message()
-            )
-        
-        # Also refresh AI tag availability since they can share the same API key
-        if hasattr(self, 'enable_ai_tags_cb'):
-            self.refresh_ai_tag_availability()
     
     def setup_tag_integration(self, main_layout):
         """Set up tag assignment integration."""
@@ -244,9 +219,8 @@ class UnifiedProcessingWidget(QWidget):
         
         main_layout.addLayout(tag_layout)
         
-        # Check tag preferences
-        self.refresh_tag_availability()
-        self.refresh_ai_tag_availability()
+        # Check tag preferences and API availability
+        self.ui_state_manager.refresh_api_availability()
         
         # Tag widget for managing tags (hidden - handled by main window tab)
         self.tag_widget = TagWidget()
@@ -255,44 +229,6 @@ class UnifiedProcessingWidget(QWidget):
         self.tag_widget.setVisible(False)  # Hidden - managed by dedicated tab
         main_layout.addWidget(self.tag_widget)
     
-    def refresh_tag_availability(self):
-        """Refresh tag checkbox availability based on preferences."""
-        logger.info("Refreshing tag checkbox availability")
-        
-        # Tags are always available (no API key required)
-        tags_enabled = self.prefs_manager.get('tags.enabled', True)
-        
-        self.enable_tags_cb.setEnabled(True)
-        self.enable_tags_cb.setChecked(tags_enabled)
-        self.enable_tags_cb.setToolTip(
-            "Enable tag assignment to images during processing"
-        )
-        
-        self._update_tag_status_display()
-            
-    def refresh_ai_tag_availability(self):
-        """Refresh AI tag checkbox availability based on API key configuration."""
-        logger.info("Refreshing AI tag checkbox availability")
-        
-        if self.api_validator.is_ai_tags_available():
-            logger.info("API key found - enabling AI tag checkbox")
-            self.enable_ai_tags_cb.setEnabled(True)
-            self.enable_ai_tags_cb.setToolTip(
-                "Enable automatic AI-powered tag generation based on image content"
-            )
-            # Check the checkbox if it was previously selected
-            ai_enabled_by_default = self.prefs_manager.get('tags.ai_generation_enabled', False)
-            if ai_enabled_by_default:
-                self.enable_ai_tags_cb.setChecked(True)
-        else:
-            logger.info("No API key found - disabling AI tag checkbox")
-            self.enable_ai_tags_cb.setEnabled(False)
-            self.enable_ai_tags_cb.setChecked(False)
-            self.enable_ai_tags_cb.setToolTip(
-                self.api_validator.get_ai_tags_error_message()
-            )
-        
-        self._update_tag_status_display()
     
     def _update_tag_status_display(self):
         """Update the tag status display based on current settings."""
@@ -486,6 +422,65 @@ class UnifiedProcessingWidget(QWidget):
         self.queue_manager.items_removed.connect(self.on_items_removed)
         self.queue_manager.queue_cleared.connect(self.on_queue_cleared)
         self.queue_manager.validation_error.connect(self.on_queue_validation_error)
+    
+    def setup_ui_state_connections(self):
+        """Connect UI state manager signals to handlers."""
+        self.ui_state_manager.state_changed.connect(self.on_ui_state_changed)
+        self.ui_state_manager.alt_text_availability_changed.connect(self.on_alt_text_availability_changed)
+        self.ui_state_manager.ai_tagging_availability_changed.connect(self.on_ai_tag_availability_changed)
+        self.ui_state_manager.output_settings_changed.connect(self.on_output_settings_changed)
+    
+    def on_ui_state_changed(self, state: UIState):
+        """Handle UI state changes."""
+        # Sync UI components with new state
+        components = {
+            'queue_widget': self.queue_widget if hasattr(self, 'queue_widget') else None,
+            'controls_widget': self.controls_widget if hasattr(self, 'controls_widget') else None,
+            'progress_widget': self.progress_widget if hasattr(self, 'progress_widget') else None
+        }
+        components = {k: v for k, v in components.items() if v is not None}
+        self.ui_state_manager.sync_components(components)
+        
+        # Update export button visibility
+        if hasattr(self, 'quick_export_btn'):
+            self.quick_export_btn.setVisible(state.has_items_with_alt_text)
+        if hasattr(self, 'quick_tag_export_btn'):
+            self.quick_tag_export_btn.setVisible(state.has_items_with_tags)
+    
+    def on_alt_text_availability_changed(self, available: bool):
+        """Handle alt text availability changes."""
+        if hasattr(self, 'enable_alt_text_cb'):
+            self.enable_alt_text_cb.setEnabled(available)
+            if not available:
+                self.enable_alt_text_cb.setChecked(False)
+                self.enable_alt_text_cb.setToolTip(
+                    self.api_validator.get_alt_text_error_message()
+                )
+            else:
+                self.enable_alt_text_cb.setToolTip(
+                    "Enable automatic alt text generation using AI after image processing"
+                )
+    
+    def on_ai_tag_availability_changed(self, available: bool):
+        """Handle AI tag availability changes."""
+        if hasattr(self, 'enable_ai_tags_cb'):
+            self.enable_ai_tags_cb.setEnabled(available)
+            if not available:
+                self.enable_ai_tags_cb.setChecked(False)
+                self.enable_ai_tags_cb.setToolTip(
+                    self.api_validator.get_ai_tags_error_message()
+                )
+            else:
+                self.enable_ai_tags_cb.setToolTip(
+                    "Enable automatic AI-powered tag generation based on image content"
+                )
+    
+    def on_output_settings_changed(self, settings: dict):
+        """Handle output settings changes."""
+        self.output_settings = settings
+        self.output_folder = settings.get('output_folder', self.output_folder)
+        if hasattr(self, 'controls_widget') and self.output_folder:
+            self.controls_widget.set_output_folder(self.output_folder)
     
     # Processing Methods
     def start_processing(self):
