@@ -29,6 +29,7 @@ from ..utils.filename_template import FilenameTemplate
 from ..utils.alt_text_exporter import AltTextExporter, ExportFormat, ExportOptions
 from ..utils.api_validator import ApiKeyValidator
 from ..utils.tag_csv_exporter import TagCsvExporter, TagExportOptions
+from ..utils.widget_configurator import WidgetConfigurator
 from .batch_widget import BatchProcessingThread
 from .alt_text_widget import AltTextWidget
 from .tag_widget import TagWidget
@@ -57,17 +58,19 @@ class UnifiedProcessingWidget(QWidget):
         self.filename_template = FilenameTemplate()
         self.tag_manager = TagManager()
         self.api_validator = ApiKeyValidator(self.prefs_manager)
+        self.widget_configurator = WidgetConfigurator(self.prefs_manager)
         
-        # Apply memory optimization settings from preferences
-        memory_limit = self.prefs_manager.get('advanced.memory_limit_mb', 2048)
-        self.batch_processor.set_memory_limit(memory_limit)
-        self.batch_processor.set_memory_optimization(True)
+        # Configure business logic components
+        self.widget_configurator.configure_batch_processor(self.batch_processor, self.tag_manager)
         
-        # Configure tag manager for batch processing
-        self.batch_processor.set_tag_manager(self.tag_manager)
+        # Load configuration settings
+        self.config = self.widget_configurator.configure_widget_components(
+            self, self.batch_processor, self.tag_manager
+        )
         
-        # Load preferences
-        self.load_preferences()
+        # Store specific settings for easy access
+        self.output_settings = self.config['output']
+        self.output_folder = self.output_settings['output_folder']
         
         # Connect to preferences changes for real-time updates
         self.prefs_manager.preferences_changed.connect(self.on_preferences_changed)
@@ -495,25 +498,33 @@ class UnifiedProcessingWidget(QWidget):
             self.tag_status_label.setStyleSheet("color: #666;")
             
     def load_preferences(self):
-        """Load preferences from the preferences manager."""
-        self.output_folder = Path(self.prefs_manager.get('output.default_folder', Path.home() / "Downloads"))
-        
-        self.output_settings = {
-            'output_folder': self.output_folder,
-            'filename_template': self.prefs_manager.get('output.filename_template', '{original_name}_{preset}'),
-            'duplicate_strategy': self.prefs_manager.get('output.duplicate_strategy', 'rename'),
-            'recent_folders': self.prefs_manager.get('output.recent_folders', []),
-            'favorite_folders': self.prefs_manager.get('output.favorite_folders', [])
-        }
+        """Load preferences using the configurator."""
+        self.output_settings = self.widget_configurator.load_output_settings()
+        self.output_folder = self.output_settings['output_folder']
         
     def on_preferences_changed(self, key: str):
-        """Handle preferences changes."""
-        if key.startswith('output.'):
-            # Reload output settings when they change
-            self.load_preferences()
+        """Handle preferences changes using the configurator."""
+        updated_config = self.widget_configurator.handle_preference_change(key, self)
+        
+        # Update local configuration
+        for category, config in updated_config.items():
+            self.config[category] = config
+        
+        # Apply UI updates based on changes
+        if 'output' in updated_config:
+            self.output_settings = updated_config['output']
+            self.output_folder = self.output_settings['output_folder']
             # Update the UI to reflect the changes
-            self.output_folder_edit.setText(str(self.output_folder))
+            if hasattr(self, 'output_folder_edit'):
+                self.output_folder_edit.setText(str(self.output_folder))
             logger.info(f"Updated output settings from preferences: {key}")
+        
+        # Refresh availability for alt text and tags if their settings changed
+        if 'alt_text' in updated_config and hasattr(self, 'enable_alt_text_cb'):
+            self.refresh_alt_text_availability()
+        
+        if 'tags' in updated_config and hasattr(self, 'enable_ai_tags_cb'):
+            self.refresh_ai_tag_availability()
         
     def update_queue_display(self):
         """Update the queue display based on current queue state."""
