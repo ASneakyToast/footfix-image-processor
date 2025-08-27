@@ -28,6 +28,7 @@ from ..utils.preferences import PreferencesManager
 from ..utils.filename_template import FilenameTemplate
 from ..utils.alt_text_exporter import AltTextExporter, ExportFormat, ExportOptions
 from ..utils.api_validator import ApiKeyValidator
+from ..utils.tag_csv_exporter import TagCsvExporter, TagExportOptions
 from .batch_widget import BatchProcessingThread
 from .alt_text_widget import AltTextWidget
 from .tag_widget import TagWidget
@@ -1227,12 +1228,12 @@ class UnifiedProcessingWidget(QWidget):
         logger.info(f"Applied tags {tags} to {len(filenames)} items")
     
     def quick_export_tags(self):
-        """Quick export tag data to CSV."""
+        """Quick export tag data to CSV using dedicated exporter."""
+        # Create tag exporter
+        exporter = TagCsvExporter()
+        
         # Check if we have any tagged items
-        tagged_items = [
-            item for item in self.batch_processor.queue
-            if item.tag_status == TagStatus.COMPLETED and item.tags
-        ]
+        tagged_items = exporter.filter_items(self.batch_processor.queue, TagExportOptions.COMPLETED_ONLY)
         
         if not tagged_items:
             QMessageBox.information(
@@ -1242,16 +1243,14 @@ class UnifiedProcessingWidget(QWidget):
             )
             return
         
-        # Generate default filename with timestamp
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_filename = f"tags_export_{timestamp}.csv"
+        # Generate default filename
+        default_filename = exporter.generate_filename()
         
         # Get save location
         output_path, _ = QFileDialog.getSaveFileName(
             self,
             "Export Tag Data",
-            str(Path.home() / "Downloads" / default_filename),
+            str(exporter.get_default_export_path(default_filename)),
             "CSV Files (*.csv)"
         )
         
@@ -1260,39 +1259,27 @@ class UnifiedProcessingWidget(QWidget):
             
         output_path = Path(output_path)
         
-        try:
-            # Simple CSV export for tags
-            import csv
-            
-            with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
-                writer = csv.writer(csvfile)
-                
-                # Write header
-                writer.writerow(['Filename', 'Tags', 'Tag Count', 'Status', 'Application Time'])
-                
-                # Write data
-                for item in tagged_items:
-                    writer.writerow([
-                        item.source_path.name,
-                        ', '.join(item.tags),
-                        len(item.tags),
-                        item.tag_status.value,
-                        f"{item.tag_application_time:.2f}s"
-                    ])
-            
+        # Export using the dedicated service
+        success, message = exporter.export_csv(
+            self.batch_processor.queue,
+            output_path,
+            TagExportOptions.COMPLETED_ONLY,
+            include_metadata=True
+        )
+        
+        if success:
             QMessageBox.information(
                 self,
                 "Export Complete",
-                f"Tag data exported to:\n{output_path.name}"
+                f"Tag data exported to:\n{output_path.name}\n\n{message}"
             )
             
             # Open in finder
             import subprocess
             subprocess.run(["open", "-R", str(output_path)])
-            
-        except Exception as e:
+        else:
             QMessageBox.critical(
                 self,
                 "Export Failed",
-                f"Failed to export tag data:\n{str(e)}"
+                message
             )
