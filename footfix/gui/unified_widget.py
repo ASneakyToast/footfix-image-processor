@@ -22,6 +22,7 @@ from ..core.batch_processor import BatchProcessor, BatchItem, BatchProgress, Pro
 from ..core.alt_text_generator import AltTextStatus
 from ..core.tag_manager import TagStatus, TagManager
 from ..core.processor import ImageProcessor
+from ..core.processing_orchestrator import ProcessingOrchestrator, ProcessingConfig, ProcessingResults
 from ..presets.profiles import PRESET_REGISTRY, get_preset, PresetConfig
 from ..utils.notifications import NotificationManager
 from ..utils.preferences import PreferencesManager
@@ -30,7 +31,6 @@ from ..utils.alt_text_exporter import AltTextExporter, ExportFormat, ExportOptio
 from ..utils.api_validator import ApiKeyValidator
 from ..utils.tag_csv_exporter import TagCsvExporter, TagExportOptions
 from ..utils.widget_configurator import WidgetConfigurator
-from .batch_widget import BatchProcessingThread
 from .alt_text_widget import AltTextWidget
 from .tag_widget import TagWidget
 from .components.queue_widget import QueueManagementWidget
@@ -52,7 +52,7 @@ class UnifiedProcessingWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.batch_processor = BatchProcessor()
-        self.processing_thread: Optional[BatchProcessingThread] = None
+        self.processing_orchestrator = ProcessingOrchestrator(self.batch_processor)
         self.is_processing = False
         
         # Initialize managers
@@ -77,6 +77,9 @@ class UnifiedProcessingWidget(QWidget):
         
         # Connect to preferences changes for real-time updates
         self.prefs_manager.preferences_changed.connect(self.on_preferences_changed)
+        
+        # Connect orchestrator signals
+        self.setup_orchestrator_connections()
         
         self.setup_ui()
         
@@ -480,6 +483,14 @@ class UnifiedProcessingWidget(QWidget):
         if self.batch_processor.remove_image(index):
             self.update_queue_display()
             
+    def setup_orchestrator_connections(self):
+        """Connect processing orchestrator signals to handlers."""
+        self.processing_orchestrator.processing_started.connect(self.on_orchestrator_started)
+        self.processing_orchestrator.processing_completed.connect(self.on_orchestrator_completed)
+        self.processing_orchestrator.progress_updated.connect(self.on_progress_updated)
+        self.processing_orchestrator.item_completed.connect(self.on_item_completed)
+        self.processing_orchestrator.status_message.connect(lambda msg: logger.info(msg))
+    
     # Processing Methods
     def start_processing(self):
         """Start processing with current settings."""
@@ -490,8 +501,30 @@ class UnifiedProcessingWidget(QWidget):
         preset_name = self.controls_widget.get_selected_preset()
         output_folder = self.controls_widget.get_output_folder()
         
-        # Start processing
-        self.is_processing = True
+        # Create processing configuration
+        config = ProcessingConfig(
+            preset_name=preset_name,
+            output_folder=output_folder,
+            generate_alt_text=self.enable_alt_text_cb.isChecked(),
+            enable_tagging=self.enable_tags_cb.isChecked(),
+            enable_ai_tagging=self.enable_ai_tags_cb.isChecked() and self.enable_ai_tags_cb.isEnabled(),
+            filename_template=self.output_settings.get('filename_template'),
+            show_notifications=self.prefs_manager.get('processing.completion_notification', True),
+            play_sound=self.prefs_manager.get('processing.completion_sound', True)
+        )
+        
+        # Start processing through orchestrator
+        if self.processing_orchestrator.start_processing(config):
+            self.is_processing = True
+        
+    def cancel_processing(self):
+        """Cancel the current processing."""
+        if self.processing_orchestrator.cancel_processing():
+            # Update controls widget cancel state
+            self.controls_widget.set_cancel_state(True)
+    
+    def on_orchestrator_started(self):
+        """Handle processing start from orchestrator."""
         self.processing_started.emit()
         
         # Update UI components processing state
@@ -499,30 +532,29 @@ class UnifiedProcessingWidget(QWidget):
         self.controls_widget.set_processing_state(True)
         self.progress_widget.show_progress()
         
-        # Create and start processing thread
-        self.processing_thread = BatchProcessingThread(
-            self.batch_processor,
-            preset_name,
-            output_folder,
-            generate_alt_text=self.enable_alt_text_cb.isChecked(),
-            enable_tagging=self.enable_tags_cb.isChecked(),
-            enable_ai_tagging=self.enable_ai_tags_cb.isChecked() and self.enable_ai_tags_cb.isEnabled(),
-            filename_template=self.output_settings.get('filename_template')
-        )
+    def on_orchestrator_completed(self, results: ProcessingResults):
+        """Handle processing completion from orchestrator."""
+        self.is_processing = False
         
-        self.processing_thread.progress_updated.connect(self.on_progress_updated)
-        self.processing_thread.item_completed.connect(self.on_item_completed)
-        self.processing_thread.batch_completed.connect(self.on_batch_completed)
-        self.processing_thread.status_message.connect(lambda msg: logger.info(msg))
+        # Update UI components processing state
+        self.queue_widget.set_processing_state(False)
+        self.controls_widget.set_processing_state(False)
         
-        self.processing_thread.start()
+        # Update progress widget completion state
+        self.progress_widget.set_completion_state(results.success, results.cancelled)
         
-    def cancel_processing(self):
-        """Cancel the current processing."""
-        if self.processing_thread and self.processing_thread.isRunning():
-            self.processing_thread.cancel()
-            # Update controls widget cancel state
-            self.controls_widget.set_cancel_state(True)
+        # Hide progress area if processing completed successfully
+        if results.success and not results.cancelled:
+            self.progress_widget.hide_progress()
+        
+        # Update displays
+        self.update_queue_display()
+        
+        # Build and show results message
+        self._show_processing_results(results)
+        
+        # Emit completion signal with results dict for compatibility
+        self.processing_completed.emit(results.to_dict())
             
     def on_progress_updated(self, progress: BatchProgress):
         """Handle progress updates from processing thread."""
@@ -533,76 +565,48 @@ class UnifiedProcessingWidget(QWidget):
         """Handle item completion updates."""
         self.update_queue_display()
         
-    def on_batch_completed(self, results: dict):
-        """Handle processing completion."""
-        self.is_processing = False
-        
-        # Update UI components processing state
-        self.queue_widget.set_processing_state(False)
-        self.controls_widget.set_processing_state(False)
-        
-        # Update progress widget completion state
-        success = results.get('success', False)
-        cancelled = results.get('cancelled', False)
-        self.progress_widget.set_completion_state(success, cancelled)
-        
-        # Hide progress area if processing completed successfully
-        if success and not cancelled:
-            self.progress_widget.hide_progress()
-        
-        # Update displays
-        self.update_queue_display()
-        
-        # Show results
-        if results.get('cancelled'):
+    def _show_processing_results(self, results: ProcessingResults):
+        """Show processing results dialog."""
+        # Build message
+        if results.cancelled:
             message = f"Processing cancelled.\n\n"
         else:
             message = f"Processing completed.\n\n"
             
         message += (
-            f"Total processed: {results.get('total_processed', 0)}\n"
-            f"Successful: {results.get('successful', 0)}\n"
-            f"Failed: {results.get('failed', 0)}\n"
-            f"Time elapsed: {self._format_time(results.get('elapsed_time', 0))}"
+            f"Total processed: {results.total_processed}\n"
+            f"Successful: {results.successful}\n"
+            f"Failed: {results.failed}\n"
+            f"Time elapsed: {self._format_time(results.elapsed_time)}"
         )
         
         # Add alt text results if applicable
-        if 'alt_text_generated' in results:
-            message += f"\n\nAlt text generated: {results.get('alt_text_generated', 0)}"
-            if results.get('alt_text_failed', 0) > 0:
-                message += f"\nAlt text failed: {results.get('alt_text_failed', 0)}"
+        if results.alt_text_generated > 0 or results.alt_text_failed > 0:
+            message += f"\n\nAlt text generated: {results.alt_text_generated}"
+            if results.alt_text_failed > 0:
+                message += f"\nAlt text failed: {results.alt_text_failed}"
         
-        # Show system notification if enabled
-        if self.prefs_manager.get('processing.completion_notification', True):
-            self.notification_manager.set_sound_enabled(
-                self.prefs_manager.get('processing.completion_sound', True)
-            )
-            
-            if not results.get('cancelled'):
-                if queue_size == 1:
-                    # Single image notification
-                    item_name = self.batch_processor.queue[0].source_path.name if self.batch_processor.queue else "image"
-                    self.notification_manager.show_single_completion(
-                        item_name,
-                        results.get('successful', 0) > 0
-                    )
-                else:
-                    # Batch notification
-                    self.notification_manager.show_batch_completion(
-                        successful=results.get('successful', 0),
-                        failed=results.get('failed', 0),
-                        elapsed_time=results.get('elapsed_time', 0)
-                    )
+        # Add tag results if applicable
+        if results.tags_applied > 0 or results.tags_failed > 0:
+            message += f"\n\nTags applied: {results.tags_applied}"
+            if results.tags_failed > 0:
+                message += f"\nTags failed: {results.tags_failed}"
         
         # Show dialog
-        if results.get('success'):
+        if results.success:
             QMessageBox.information(self, "Processing Complete", message)
         else:
             QMessageBox.warning(self, "Processing Complete with Errors", message)
-            
-        # Emit completion signal
-        self.processing_completed.emit(results)
         
+    
+    def _format_time(self, seconds: float) -> str:
+        """Format time in seconds to human-readable string."""
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        else:
+            from datetime import timedelta
+            td = timedelta(seconds=int(seconds))
+            return str(td).split('.')[0]  # Remove microseconds
             
     # Preview and Settings Methods
     def show_preview(self):
