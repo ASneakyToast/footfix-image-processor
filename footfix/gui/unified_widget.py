@@ -34,6 +34,7 @@ from .batch_widget import BatchProcessingThread
 from .alt_text_widget import AltTextWidget
 from .tag_widget import TagWidget
 from .components.queue_widget import QueueManagementWidget
+from .components.controls_widget import ProcessingControlsWidget
 
 logger = logging.getLogger(__name__)
 
@@ -92,11 +93,10 @@ class UnifiedProcessingWidget(QWidget):
         self.setup_queue_connections()
         main_layout.addWidget(self.queue_widget)
         
-        # Processing Controls - always visible
-        self.setup_processing_controls(main_layout)
-        
-        # Action Buttons - always visible  
-        self.setup_action_buttons(main_layout)
+        # Processing Controls Widget
+        self.controls_widget = ProcessingControlsWidget()
+        self.setup_controls_connections()
+        main_layout.addWidget(self.controls_widget)
         
         # Progress Area - shown during processing
         self.setup_progress_area(main_layout)
@@ -119,126 +119,18 @@ class UnifiedProcessingWidget(QWidget):
         self.queue_widget.selection_changed.connect(self.on_queue_selection_changed)
         self.queue_widget.files_dropped.connect(self.on_files_dropped)
         
-    def setup_processing_controls(self, main_layout):
-        """Set up the processing controls section."""
-        controls_group = QGroupBox("Processing Options")
-        controls_layout = QVBoxLayout(controls_group)
+    def setup_controls_connections(self):
+        """Connect processing controls widget signals to handlers."""
+        self.controls_widget.preset_changed.connect(self.on_preset_changed)
+        self.controls_widget.output_folder_changed.connect(self.on_output_folder_changed)
+        self.controls_widget.advanced_settings_requested.connect(self.show_advanced_settings)
+        self.controls_widget.output_settings_requested.connect(self.show_output_settings)
+        self.controls_widget.preview_requested.connect(self.show_preview)
+        self.controls_widget.process_requested.connect(self.start_processing)
+        self.controls_widget.processing_cancelled.connect(self.cancel_processing)
         
-        # Preset selection
-        preset_layout = QHBoxLayout()
-        preset_layout.addWidget(QLabel("Preset:"))
-        
-        self.preset_combo = QComboBox()
-        self.preset_combo.addItem("Editorial Web (Max 2560×1440, 0.5-1MB)", "editorial_web")
-        self.preset_combo.addItem("Email (Max 600px width, <100KB)", "email")
-        self.preset_combo.addItem("Instagram Story (1080×1920)", "instagram_story")
-        self.preset_combo.addItem("Instagram Feed Portrait (1080×1350)", "instagram_feed_portrait")
-        
-        # Add tooltips for each preset
-        self.preset_combo.setItemData(0, 
-            "Optimized for web articles and galleries.\n"
-            "Maximum dimensions: 2560×1440 pixels\n"
-            "Target file size: 0.5-1MB\n"
-            "Perfect for editorial content and blog posts.",
-            Qt.ToolTipRole
-        )
-        self.preset_combo.setItemData(1,
-            "Small file size for email attachments.\n"
-            "Maximum width: 600 pixels\n"
-            "Target file size: <100KB\n"
-            "Ensures images load quickly in email clients.",
-            Qt.ToolTipRole
-        )
-        self.preset_combo.setItemData(2,
-            "Instagram Stories format.\n"
-            "Exact dimensions: 1080×1920 pixels (9:16)\n"
-            "Images will be cropped to fit if needed.\n"
-            "Optimized for mobile viewing.",
-            Qt.ToolTipRole
-        )
-        self.preset_combo.setItemData(3,
-            "Instagram Feed portrait format.\n"
-            "Exact dimensions: 1080×1350 pixels (4:5)\n"
-            "Images will be cropped to fit if needed.\n"
-            "Ideal for Instagram posts.",
-            Qt.ToolTipRole
-        )
-        
-        preset_layout.addWidget(self.preset_combo, 1)
-        
-        # Advanced settings button
-        self.advanced_button = QPushButton("Advanced...")
-        self.advanced_button.clicked.connect(self.show_advanced_settings)
-        preset_layout.addWidget(self.advanced_button)
-        
-        controls_layout.addLayout(preset_layout)
-        
-        # Output folder selection
-        output_layout = QHBoxLayout()
-        output_layout.addWidget(QLabel("Output Folder:"))
-        
-        self.output_folder_edit = QLineEdit(str(self.output_folder))
-        self.output_folder_edit.setReadOnly(True)
-        output_layout.addWidget(self.output_folder_edit, 1)
-        
-        browse_button = QPushButton("Browse")
-        browse_button.clicked.connect(self.select_output_folder)
-        output_layout.addWidget(browse_button)
-        
-        # Output settings button
-        output_settings_button = QPushButton("Settings...")
-        output_settings_button.clicked.connect(self.show_output_settings)
-        output_layout.addWidget(output_settings_button)
-        
-        controls_layout.addLayout(output_layout)
-        
-        main_layout.addWidget(controls_group)
-        
-    def setup_action_buttons(self, main_layout):
-        """Set up the action buttons that adapt based on queue size."""
-        button_layout = QHBoxLayout()
-        
-        # Preview button
-        self.preview_button = QPushButton("Preview Selected")
-        self.preview_button.clicked.connect(self.show_preview)
-        self.preview_button.setEnabled(False)
-        self.preview_button.setMinimumHeight(40)
-        self.preview_button.setStyleSheet("""
-            QPushButton {
-                font-size: 16px;
-            }
-            QPushButton:enabled {
-                background-color: #28a745;
-                color: white;
-            }
-        """)
-        button_layout.addWidget(self.preview_button)
-        
-        # Main process button - text adapts to queue size
-        self.process_button = QPushButton("Add Images to Start")
-        self.process_button.clicked.connect(self.start_processing)
-        self.process_button.setEnabled(False)
-        self.process_button.setMinimumHeight(40)
-        self.process_button.setStyleSheet("""
-            QPushButton {
-                font-size: 16px;
-                font-weight: bold;
-            }
-            QPushButton:enabled {
-                background-color: #007AFF;
-                color: white;
-            }
-        """)
-        button_layout.addWidget(self.process_button)
-        
-        # Cancel button
-        self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.clicked.connect(self.cancel_processing)
-        self.cancel_button.setEnabled(False)
-        self.cancel_button.setMinimumHeight(40)
-        button_layout.addWidget(self.cancel_button)
-        
-        main_layout.addLayout(button_layout)
+        # Set initial state
+        self.controls_widget.set_output_folder(self.output_folder)
         
     def setup_progress_area(self, main_layout):
         """Set up the progress display area."""
@@ -475,22 +367,9 @@ class UnifiedProcessingWidget(QWidget):
         # Delegate queue display to the queue widget
         self.queue_widget.update_queue_display(queue_info)
         
-        # Update process button text and state
-        if queue_size == 0:
-            self.process_button.setText("Add Images to Start")
-            self.process_button.setEnabled(False)
-            self.preview_button.setEnabled(False)
-        else:
-            # Update process button text
-            if queue_size == 1:
-                self.process_button.setText("Process Image")
-            else:
-                self.process_button.setText(f"Process {queue_size} Images")
-            self.process_button.setEnabled(not self.is_processing)
-            
-        # Update preview button based on selection
-        selected_rows = self.queue_widget.get_selected_indices()
-        self.preview_button.setEnabled(len(selected_rows) == 1 and not self.is_processing)
+        # Update controls widget state
+        selected_count = len(self.queue_widget.get_selected_indices())
+        self.controls_widget.update_queue_state(queue_size, selected_count)
         
         # Show/hide export button based on alt text availability
         has_alt_text = any(
@@ -514,8 +393,9 @@ class UnifiedProcessingWidget(QWidget):
             
     def on_queue_selection_changed(self, selected_indices: List[int]):
         """Handle queue selection changes from the queue widget."""
-        # Update preview button based on selection
-        self.preview_button.setEnabled(len(selected_indices) == 1 and not self.is_processing)
+        # Update controls widget with new selection count
+        queue_size = len(self.batch_processor.get_queue_info())
+        self.controls_widget.update_queue_state(queue_size, len(selected_indices))
         
     def on_files_dropped(self, file_paths: List[Path]):
         """Handle files dropped on the queue widget."""
@@ -526,6 +406,17 @@ class UnifiedProcessingWidget(QWidget):
                 "Images Added", 
                 f"Added {added_count} images to processing queue."
             )
+            
+    def on_preset_changed(self, preset_name: str):
+        """Handle preset selection changes from the controls widget."""
+        logger.info(f"Preset changed to: {preset_name}")
+        # The preset will be used when processing starts
+        
+    def on_output_folder_changed(self, folder_path: Path):
+        """Handle output folder changes from the controls widget."""
+        self.output_folder = folder_path
+        self.output_settings['output_folder'] = folder_path
+        logger.info(f"Output folder changed to: {folder_path}")
             
     # Queue Management Methods
     def add_images(self):
@@ -619,20 +510,17 @@ class UnifiedProcessingWidget(QWidget):
         if not self.batch_processor.queue:
             return
             
-        # Get preset and output folder
-        preset_name = self.preset_combo.currentData()
-        output_folder = self.output_folder
+        # Get preset and output folder from controls widget
+        preset_name = self.controls_widget.get_selected_preset()
+        output_folder = self.controls_widget.get_output_folder()
         
         # Start processing
         self.is_processing = True
         self.processing_started.emit()
         
-        # Update UI
-        self.process_button.setText("Processing...")
-        self.process_button.setEnabled(False)
-        self.cancel_button.setEnabled(True)
-        # Update queue widget processing state
+        # Update UI components processing state
         self.queue_widget.set_processing_state(True)
+        self.controls_widget.set_processing_state(True)
         
         # Show progress area
         self.progress_group.setVisible(True)
@@ -664,8 +552,8 @@ class UnifiedProcessingWidget(QWidget):
         """Cancel the current processing."""
         if self.processing_thread and self.processing_thread.isRunning():
             self.processing_thread.cancel()
-            self.cancel_button.setEnabled(False)
-            self.cancel_button.setText("Cancelling...")
+            # Update controls widget cancel state
+            self.controls_widget.set_cancel_state(True)
             
     def on_progress_updated(self, progress: BatchProgress):
         """Handle progress updates from processing thread."""
@@ -692,20 +580,9 @@ class UnifiedProcessingWidget(QWidget):
         self.is_processing = False
         self.update_timer.stop()
         
-        # Update UI
-        queue_size = len(self.batch_processor.queue)
-        if queue_size == 0:
-            self.process_button.setText("Add Images to Start")
-        elif queue_size == 1:
-            self.process_button.setText("Process Image")
-        else:
-            self.process_button.setText(f"Process {queue_size} Images")
-            
-        self.process_button.setEnabled(queue_size > 0)
-        self.cancel_button.setEnabled(False)
-        self.cancel_button.setText("Cancel")
-        # Update queue widget processing state
+        # Update UI components processing state
         self.queue_widget.set_processing_state(False)
+        self.controls_widget.set_processing_state(False)
         self.current_item_label.setVisible(False)
         
         # Hide progress area if all items are processed
@@ -826,19 +703,6 @@ class UnifiedProcessingWidget(QWidget):
         parent = self.window()
         if hasattr(parent, 'show_advanced_settings'):
             parent.show_advanced_settings()
-            
-    def select_output_folder(self):
-        """Open folder dialog to select output directory."""
-        folder = QFileDialog.getExistingDirectory(
-            self,
-            "Select Output Folder",
-            str(self.output_folder)
-        )
-        
-        if folder:
-            self.output_folder = Path(folder)
-            self.output_folder_edit.setText(str(self.output_folder))
-            self.output_settings['output_folder'] = self.output_folder
             
     def show_output_settings(self):
         """Show the output settings dialog."""
