@@ -35,6 +35,7 @@ from .alt_text_widget import AltTextWidget
 from .tag_widget import TagWidget
 from .components.queue_widget import QueueManagementWidget
 from .components.controls_widget import ProcessingControlsWidget
+from .components.progress_widget import ProgressDisplayWidget
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +80,6 @@ class UnifiedProcessingWidget(QWidget):
         
         self.setup_ui()
         
-        # Timer for UI updates during processing
-        self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self.update_time_display)
-        
     def setup_ui(self):
         """Set up the unified user interface."""
         main_layout = QVBoxLayout(self)
@@ -98,8 +95,10 @@ class UnifiedProcessingWidget(QWidget):
         self.setup_controls_connections()
         main_layout.addWidget(self.controls_widget)
         
-        # Progress Area - shown during processing
-        self.setup_progress_area(main_layout)
+        # Progress Display Widget
+        self.progress_widget = ProgressDisplayWidget()
+        self.setup_progress_connections()
+        main_layout.addWidget(self.progress_widget)
         
         # Alt Text Integration
         self.setup_alt_text_integration(main_layout)
@@ -132,39 +131,16 @@ class UnifiedProcessingWidget(QWidget):
         # Set initial state
         self.controls_widget.set_output_folder(self.output_folder)
         
-    def setup_progress_area(self, main_layout):
-        """Set up the progress display area."""
-        self.progress_group = QGroupBox("Processing Progress")
-        progress_layout = QVBoxLayout(self.progress_group)
+    def setup_progress_connections(self):
+        """Connect progress widget signals to handlers."""
+        # The progress widget is mostly self-contained
+        # We just need to connect its visibility signal if needed
+        self.progress_widget.progress_visibility_changed.connect(self.on_progress_visibility_changed)
         
-        # Overall progress
-        self.overall_progress_label = QLabel("Ready to process")
-        progress_layout.addWidget(self.overall_progress_label)
-        
-        self.overall_progress_bar = QProgressBar()
-        self.overall_progress_bar.setTextVisible(True)
-        progress_layout.addWidget(self.overall_progress_bar)
-        
-        # Current item progress
-        self.current_item_label = QLabel("")
-        self.current_item_label.setVisible(False)
-        progress_layout.addWidget(self.current_item_label)
-        
-        # Time estimation
-        time_layout = QHBoxLayout()
-        self.elapsed_label = QLabel("Elapsed: --:--")
-        time_layout.addWidget(self.elapsed_label)
-        
-        time_layout.addStretch()
-        
-        self.remaining_label = QLabel("Remaining: --:--")
-        time_layout.addWidget(self.remaining_label)
-        
-        progress_layout.addLayout(time_layout)
-        
-        # Initially hidden
-        self.progress_group.setVisible(False)
-        main_layout.addWidget(self.progress_group)
+    def on_progress_visibility_changed(self, is_visible: bool):
+        """Handle progress visibility changes."""
+        # This can be used for layout adjustments or other UI updates
+        logger.info(f"Progress visibility changed: {is_visible}")
         
     def setup_alt_text_integration(self, main_layout):
         """Set up alt text generation integration."""
@@ -521,14 +497,7 @@ class UnifiedProcessingWidget(QWidget):
         # Update UI components processing state
         self.queue_widget.set_processing_state(True)
         self.controls_widget.set_processing_state(True)
-        
-        # Show progress area
-        self.progress_group.setVisible(True)
-        self.overall_progress_bar.setValue(0)
-        self.current_item_label.setVisible(True)
-        
-        # Start timer
-        self.update_timer.start(100)  # Update every 100ms
+        self.progress_widget.show_progress()
         
         # Create and start processing thread
         self.processing_thread = BatchProcessingThread(
@@ -557,19 +526,8 @@ class UnifiedProcessingWidget(QWidget):
             
     def on_progress_updated(self, progress: BatchProgress):
         """Handle progress updates from processing thread."""
-        # Update progress bar
-        if progress.total_items > 0:
-            percentage = ((progress.completed_items + progress.failed_items) / progress.total_items) * 100
-            self.overall_progress_bar.setValue(int(percentage))
-            
-        # Update labels
-        self.overall_progress_label.setText(
-            f"Processing {progress.current_item_index + 1} of {progress.total_items} - "
-            f"{progress.completed_items} completed, {progress.failed_items} failed"
-        )
-        
-        if progress.current_item_name:
-            self.current_item_label.setText(f"Current: {progress.current_item_name}")
+        # Delegate to progress widget
+        self.progress_widget.update_progress(progress)
             
     def on_item_completed(self, item: BatchItem):
         """Handle item completion updates."""
@@ -578,16 +536,19 @@ class UnifiedProcessingWidget(QWidget):
     def on_batch_completed(self, results: dict):
         """Handle processing completion."""
         self.is_processing = False
-        self.update_timer.stop()
         
         # Update UI components processing state
         self.queue_widget.set_processing_state(False)
         self.controls_widget.set_processing_state(False)
-        self.current_item_label.setVisible(False)
         
-        # Hide progress area if all items are processed
-        if results.get('success', False) and not results.get('cancelled', False):
-            self.progress_group.setVisible(False)
+        # Update progress widget completion state
+        success = results.get('success', False)
+        cancelled = results.get('cancelled', False)
+        self.progress_widget.set_completion_state(success, cancelled)
+        
+        # Hide progress area if processing completed successfully
+        if success and not cancelled:
+            self.progress_widget.hide_progress()
         
         # Update displays
         self.update_queue_display()
@@ -642,29 +603,6 @@ class UnifiedProcessingWidget(QWidget):
         # Emit completion signal
         self.processing_completed.emit(results)
         
-    def update_time_display(self):
-        """Update time display during processing."""
-        if not self.is_processing or not hasattr(self.batch_processor, 'progress'):
-            return
-            
-        progress = self.batch_processor.progress
-        
-        # Update elapsed time
-        self.elapsed_label.setText(f"Elapsed: {self._format_time(progress.elapsed_time)}")
-        
-        # Update remaining time
-        if progress.estimated_time_remaining > 0:
-            self.remaining_label.setText(f"Remaining: {self._format_time(progress.estimated_time_remaining)}")
-        else:
-            self.remaining_label.setText("Remaining: Calculating...")
-            
-    def _format_time(self, seconds: float) -> str:
-        """Format time in seconds to human-readable string."""
-        if seconds < 60:
-            return f"{int(seconds)}s"
-        else:
-            td = timedelta(seconds=int(seconds))
-            return str(td).split('.')[0]  # Remove microseconds
             
     # Preview and Settings Methods
     def show_preview(self):
