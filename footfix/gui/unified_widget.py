@@ -23,6 +23,7 @@ from ..core.alt_text_generator import AltTextStatus
 from ..core.tag_manager import TagStatus, TagManager
 from ..core.processor import ImageProcessor
 from ..core.processing_orchestrator import ProcessingOrchestrator, ProcessingConfig, ProcessingResults
+from ..core.queue_manager import QueueManager
 from ..presets.profiles import PRESET_REGISTRY, get_preset, PresetConfig
 from ..utils.notifications import NotificationManager
 from ..utils.preferences import PreferencesManager
@@ -52,6 +53,7 @@ class UnifiedProcessingWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.batch_processor = BatchProcessor()
+        self.queue_manager = QueueManager(self.batch_processor)
         self.processing_orchestrator = ProcessingOrchestrator(self.batch_processor)
         self.is_processing = False
         
@@ -78,8 +80,9 @@ class UnifiedProcessingWidget(QWidget):
         # Connect to preferences changes for real-time updates
         self.prefs_manager.preferences_changed.connect(self.on_preferences_changed)
         
-        # Connect orchestrator signals
+        # Connect service signals
         self.setup_orchestrator_connections()
+        self.setup_queue_manager_connections()
         
         self.setup_ui()
         
@@ -378,13 +381,7 @@ class UnifiedProcessingWidget(QWidget):
         
     def on_files_dropped(self, file_paths: List[Path]):
         """Handle files dropped on the queue widget."""
-        added_count = self.add_images_to_queue(file_paths)
-        if added_count > 0:
-            QMessageBox.information(
-                self,
-                "Images Added", 
-                f"Added {added_count} images to processing queue."
-            )
+        self.queue_manager.add_images(file_paths)
             
     def on_preset_changed(self, preset_name: str):
         """Handle preset selection changes from the controls widget."""
@@ -397,6 +394,37 @@ class UnifiedProcessingWidget(QWidget):
         self.output_settings['output_folder'] = folder_path
         logger.info(f"Output folder changed to: {folder_path}")
             
+    # Queue event handlers
+    def on_queue_size_changed(self, size: int):
+        """Handle queue size changes from queue manager."""
+        self.queue_changed.emit(size)
+        self.update_queue_display()
+        
+    def on_items_added(self, count: int):
+        """Handle items added to queue."""
+        if count > 0:
+            QMessageBox.information(
+                self,
+                "Images Added",
+                f"Added {count} images to processing queue."
+            )
+            
+    def on_items_removed(self, count: int):
+        """Handle items removed from queue."""
+        logger.info(f"Removed {count} items from queue")
+        
+    def on_queue_cleared(self):
+        """Handle queue cleared event."""
+        logger.info("Queue cleared")
+        
+    def on_queue_validation_error(self, error_message: str):
+        """Handle queue validation errors."""
+        QMessageBox.warning(
+            self,
+            "Queue Operation Failed",
+            error_message
+        )
+    
     # Queue Management Methods
     def add_images(self):
         """Open dialog to select multiple images."""
@@ -408,14 +436,8 @@ class UnifiedProcessingWidget(QWidget):
         )
         
         if files:
-            added_count = 0
-            for file_path in files:
-                if self.batch_processor.add_image(Path(file_path)):
-                    added_count += 1
-                    
-            self.update_queue_display()
-            if added_count > 0:
-                logger.info(f"Added {added_count} images to queue")
+            file_paths = [Path(f) for f in files]
+            self.queue_manager.add_images(file_paths)
                 
     def add_folder(self):
         """Open dialog to select a folder containing images."""
@@ -426,62 +448,28 @@ class UnifiedProcessingWidget(QWidget):
         )
         
         if folder:
-            added_count = self.batch_processor.add_folder(Path(folder))
-            self.update_queue_display()
-            if added_count > 0:
-                logger.info(f"Added {added_count} images from folder")
-            else:
-                QMessageBox.warning(
-                    self,
-                    "No Images Found",
-                    "No compatible images found in the selected folder."
-                )
+            self.queue_manager.add_folder(Path(folder))
                 
     def add_images_to_queue(self, file_paths: List[Path]):
         """Add multiple images to the queue."""
-        added_count = 0
-        for path in file_paths:
-            if self.batch_processor.add_image(path):
-                added_count += 1
-                
-        self.update_queue_display()
-        return added_count
+        return self.queue_manager.add_images(file_paths)
         
     def clear_queue(self):
         """Clear all images from the queue."""
-        if self.is_processing:
-            QMessageBox.warning(
-                self,
-                "Processing Active",
-                "Cannot clear queue while processing is active."
-            )
-            return
-            
-        if self.batch_processor.queue:
+        if self.queue_manager.has_items:
             reply = QMessageBox.question(
                 self,
                 "Clear Queue",
-                f"Remove all {len(self.batch_processor.queue)} images from queue?",
+                f"Remove all {self.queue_manager.queue_size} images from queue?",
                 QMessageBox.Yes | QMessageBox.No
             )
             
             if reply == QMessageBox.Yes:
-                self.batch_processor.clear_queue()
-                self.update_queue_display()
-                logger.info("Queue cleared")
+                self.queue_manager.clear_queue()
                 
     def remove_item(self, index: int):
         """Remove an item from the queue."""
-        if self.is_processing:
-            QMessageBox.warning(
-                self,
-                "Processing Active",
-                "Cannot modify queue while processing is active."
-            )
-            return
-            
-        if self.batch_processor.remove_image(index):
-            self.update_queue_display()
+        self.queue_manager.remove_item(index)
             
     def setup_orchestrator_connections(self):
         """Connect processing orchestrator signals to handlers."""
@@ -490,6 +478,14 @@ class UnifiedProcessingWidget(QWidget):
         self.processing_orchestrator.progress_updated.connect(self.on_progress_updated)
         self.processing_orchestrator.item_completed.connect(self.on_item_completed)
         self.processing_orchestrator.status_message.connect(lambda msg: logger.info(msg))
+    
+    def setup_queue_manager_connections(self):
+        """Connect queue manager signals to handlers."""
+        self.queue_manager.queue_changed.connect(self.on_queue_size_changed)
+        self.queue_manager.items_added.connect(self.on_items_added)
+        self.queue_manager.items_removed.connect(self.on_items_removed)
+        self.queue_manager.queue_cleared.connect(self.on_queue_cleared)
+        self.queue_manager.validation_error.connect(self.on_queue_validation_error)
     
     # Processing Methods
     def start_processing(self):
@@ -527,6 +523,9 @@ class UnifiedProcessingWidget(QWidget):
         """Handle processing start from orchestrator."""
         self.processing_started.emit()
         
+        # Lock queue during processing
+        self.queue_manager.set_processing_lock(True)
+        
         # Update UI components processing state
         self.queue_widget.set_processing_state(True)
         self.controls_widget.set_processing_state(True)
@@ -535,6 +534,9 @@ class UnifiedProcessingWidget(QWidget):
     def on_orchestrator_completed(self, results: ProcessingResults):
         """Handle processing completion from orchestrator."""
         self.is_processing = False
+        
+        # Unlock queue after processing
+        self.queue_manager.set_processing_lock(False)
         
         # Update UI components processing state
         self.queue_widget.set_processing_state(False)
