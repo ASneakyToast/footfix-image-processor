@@ -1,8 +1,8 @@
-# FootFix Build Documentation
+# Contributing to FootFix
 
 ## Overview
 
-This document describes how to build FootFix from source, create distribution packages, and manage releases.
+This guide covers how to contribute to FootFix development, including setting up your development environment, building from source, and creating distribution packages.
 
 ## Prerequisites
 

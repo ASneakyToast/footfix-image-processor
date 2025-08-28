@@ -129,15 +129,19 @@ mypy footfix/
 ### Project Structure
 ```
 footfix/
-├── core/                  # Image processing engine
-│   ├── processor.py       # Single image processing
-│   └── batch_processor.py # Batch processing with queue management
-├── gui/                   # PySide6 user interface
-│   ├── main_window.py     # Main application window with tabs
-│   └── batch_widget.py    # Batch processing UI widget
-├── presets/               # Processing profiles
-│   └── profiles.py        # Preset configurations
-├── utils/                 # Utility functions
+├── build/                 # Build scripts and assets
+│   ├── setup_app.py       # macOS app packaging
+│   ├── assets/            # App icons and build resources
+│   └── *.sh              # Build automation scripts
+├── docs/                  # Documentation
+│   └── guides/            # User and developer documentation
+├── playgrounds/           # Experimental scripts and demos
+├── footfix/               # Main application package
+│   ├── core/              # Image processing engine
+│   ├── gui/               # PySide6 user interface
+│   ├── presets/           # Processing profiles
+│   ├── qml_ui/            # QML-based UI components
+│   └── utils/             # Utility functions
 └── tests/                 # Test suite
 ```
 

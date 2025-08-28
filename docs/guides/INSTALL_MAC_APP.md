@@ -1,13 +1,13 @@
-# FootFix Installation Guide
+# FootFix macOS App Installation
 
-## Quick Installation (For End Users)
+This guide covers installing the FootFix macOS application from the .dmg package. **No Python installation required** - this is a standalone app bundle.
 
-### System Requirements
+## System Requirements
 - macOS 10.15 (Catalina) or later
-- Intel or Apple Silicon processor
+- Intel or Apple Silicon processor  
 - 100MB free disk space
 
-### Installation Steps
+## Installation Steps
 
 1. **Download FootFix**
    - Obtain `FootFix-1.0.0.dmg` from your IT department or designated source

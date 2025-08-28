@@ -43,6 +43,9 @@ env/
 logs/
 .footfix/
 
+# Test outputs
+test_output/
+
 # Test coverage
 htmlcov/
 .coverage
@@ -60,7 +63,9 @@ dmypy.json
 
 # Distribution / packaging
 .Python
-build/
+build/dist/
+build/build/
+build/*.log
 develop-eggs/
 dist/
 downloads/
