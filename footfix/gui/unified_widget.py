@@ -28,6 +28,7 @@ from ..presets.profiles import PRESET_REGISTRY, get_preset, PresetConfig
 from ..utils.notifications import NotificationManager
 from ..utils.preferences import PreferencesManager
 from ..utils.filename_template import FilenameTemplate
+from ..utils.ui_state_manager import UIState, UIStateManager
 from ..utils.alt_text_exporter import AltTextExporter, ExportFormat, ExportOptions
 from ..utils.api_validator import ApiKeyValidator
 from ..utils.tag_csv_exporter import TagCsvExporter, TagExportOptions
@@ -64,6 +65,7 @@ class UnifiedProcessingWidget(QWidget):
         self.tag_manager = TagManager()
         self.api_validator = ApiKeyValidator(self.prefs_manager)
         self.widget_configurator = WidgetConfigurator(self.prefs_manager)
+        self.ui_state_manager = UIStateManager(self.batch_processor, self.tag_manager)
         
         # Configure business logic components
         self.widget_configurator.configure_batch_processor(self.batch_processor, self.tag_manager)

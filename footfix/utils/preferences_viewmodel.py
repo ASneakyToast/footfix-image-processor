@@ -4,7 +4,7 @@ Handles business logic, validation, and coordination between model and view.
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Set
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, QTimer
@@ -342,7 +342,7 @@ class PreferencesViewModel(QObject):
         """Check if there are unsaved changes."""
         return bool(self._unsaved_changes)
     
-    def get_unsaved_keys(self) -> set[str]:
+    def get_unsaved_keys(self) -> Set[str]:
         """Get keys with unsaved changes."""
         return self._unsaved_changes.copy()
     

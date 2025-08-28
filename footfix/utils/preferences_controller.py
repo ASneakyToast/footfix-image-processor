@@ -5,7 +5,7 @@ Coordinates between model, viewmodel, and provides unified API for the applicati
 
 import logging
 import asyncio
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Set
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
@@ -287,7 +287,7 @@ class PreferencesController(QObject):
         """Validate all current preferences."""
         return self._model.validate_all()
     
-    def get_unsaved_keys(self) -> set[str]:
+    def get_unsaved_keys(self) -> Set[str]:
         """Get keys with unsaved changes."""
         return self._viewmodel.get_unsaved_keys()
     
