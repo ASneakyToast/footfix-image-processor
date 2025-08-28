@@ -18,7 +18,8 @@ from PySide6.QtGui import QFont
 
 from ..core.processor import ImageProcessor
 from ..presets.profiles import get_preset, PresetConfig
-from ..utils.preferences import PreferencesManager
+from ..utils.preferences_controller import PreferencesController
+from ..utils.preferences_migration import ensure_preferences_migrated
 from ..utils.notifications import NotificationManager
 from .unified_widget import UnifiedProcessingWidget
 from .alt_text_widget import AltTextWidget
@@ -28,7 +29,7 @@ from .preview_widget import PreviewWidget
 from .settings_dialog import AdvancedSettingsDialog
 from .menu_bar import MenuBarManager
 from .output_settings_dialog import OutputSettingsDialog
-from .preferences_window import PreferencesWindow
+from .preferences_window_new import PreferencesWindow
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +41,13 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         
-        # Initialize preferences first (use singleton)
-        self.prefs_manager = PreferencesManager.get_instance()
+        # Ensure preferences migration is complete
+        ensure_preferences_migrated()
         
-        self.processor = ImageProcessor(self.prefs_manager)
+        # Initialize preferences controller
+        self.prefs_controller = PreferencesController.get_instance()
+        
+        self.processor = ImageProcessor(self.prefs_controller)
         self.current_image_path: Optional[Path] = None
         self.preview_window = None
         self.custom_settings = None  # Store custom settings from advanced dialog
@@ -160,8 +164,8 @@ class MainWindow(QMainWindow):
     def setup_preference_connections(self):
         """Set up connections to preference change signals."""
         # Connect to preference change signals
-        self.prefs_manager.preferences_changed.connect(self.on_preference_changed)
-        self.prefs_manager.preferences_reloaded.connect(self.on_preferences_reloaded)
+        self.prefs_controller.preferences_changed.connect(self.on_preference_changed)
+        self.prefs_controller.preferences_loaded.connect(self.on_preferences_reloaded)
         logger.info("Connected to preference change signals")
         
     def on_preference_changed(self, key: str):
@@ -173,7 +177,7 @@ class MainWindow(QMainWindow):
             self.load_preferences()
         elif key.startswith('interface.'):
             # Apply interface preferences
-            show_tooltips = self.prefs_manager.get('interface.show_tooltips', True)
+            show_tooltips = self.prefs_controller.get_bool('interface.show_tooltips', True)
             if not show_tooltips:
                 # Disable tooltips (would need to implement tooltip management)
                 pass
@@ -195,7 +199,7 @@ class MainWindow(QMainWindow):
             self.unified_widget.refresh_alt_text_availability()
             
         # Apply interface preferences
-        show_tooltips = self.prefs_manager.get('interface.show_tooltips', True)
+        show_tooltips = self.prefs_controller.get_bool('interface.show_tooltips', True)
         if not show_tooltips:
             # Disable tooltips (would need to implement tooltip management)
             pass
@@ -209,10 +213,9 @@ class MainWindow(QMainWindow):
         self.menu_manager.enable_image_actions(True)
         
         # Update recent files in preferences
-        self.prefs_manager.update_recent('files', str(self.current_image_path))
-        self.recent_files = self.prefs_manager.get('recent.files', [])
+        self.prefs_controller.add_recent_file(str(self.current_image_path))
+        self.recent_files = self.prefs_controller.get_recent_items('files')
         self.menu_manager._update_recent_files(self.recent_files)
-        self.prefs_manager.save()
         
         logger.info(f"Image loaded in unified interface: {self.current_image_path.name}")
         
@@ -317,7 +320,7 @@ class MainWindow(QMainWindow):
         preset_config = preset.get_config() if preset else None
         
         # Create and show dialog
-        dialog = AdvancedSettingsDialog(self, preset_config, self.prefs_manager)
+        dialog = AdvancedSettingsDialog(self, preset_config, self.prefs_controller)
         dialog.settings_applied.connect(self.on_custom_settings_applied)
         
         if dialog.exec() == QDialog.Accepted:
@@ -521,18 +524,18 @@ class MainWindow(QMainWindow):
     def load_preferences(self):
         """Load preferences from the preferences manager."""
         # Only load preferences needed by main window - unified widget handles its own
-        self.recent_files = self.prefs_manager.get('recent.files', [])
+        self.recent_files = self.prefs_controller.get_recent_items('files')
         
     def restore_window_state(self):
         """Restore window geometry and state from preferences."""
-        geometry = self.prefs_manager.get('interface.window_geometry')
+        geometry = self.prefs_controller.get('interface.window_geometry')
         if geometry:
             try:
                 self.restoreGeometry(bytes.fromhex(geometry))
             except:
                 pass
                 
-        state = self.prefs_manager.get('interface.window_state')
+        state = self.prefs_controller.get('interface.window_state')
         if state:
             try:
                 self.restoreState(bytes.fromhex(state))
@@ -541,9 +544,8 @@ class MainWindow(QMainWindow):
                 
     def save_window_state(self):
         """Save window geometry and state to preferences."""
-        self.prefs_manager.set('interface.window_geometry', self.saveGeometry().toHex().data().decode())
-        self.prefs_manager.set('interface.window_state', self.saveState().toHex().data().decode())
-        self.prefs_manager.save()
+        self.prefs_controller.set('interface.window_geometry', self.saveGeometry().toHex().data().decode())
+        self.prefs_controller.set('interface.window_state', self.saveState().toHex().data().decode())
         
     def closeEvent(self, event):
         """Handle window close event."""
@@ -571,6 +573,6 @@ class MainWindow(QMainWindow):
         logger.info("on_preferences_dialog_changed called - triggering preference reload")
         
         # Force reload from disk to pick up any changes
-        self.prefs_manager.reload_from_disk()
+        self.prefs_controller.reload_from_disk()
         
         logger.info("Preferences dialog changes processed")
